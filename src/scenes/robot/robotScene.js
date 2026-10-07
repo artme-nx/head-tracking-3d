@@ -453,25 +453,36 @@ export class RobotScene {
         vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
         // Svjetliji centar, mekši rubovi — kao pravi difuzor.
         fragmentShader: `uniform vec3 color; varying vec2 vUv;
-          void main(){ vec2 q = abs(vUv - 0.5) * 2.0; float e = (1.0 - smoothstep(0.75, 1.0, q.x)) * (1.0 - smoothstep(0.82, 1.0, q.y));
-            gl_FragColor = vec4(color * (0.55 + 0.45 * e), 1.0); }`,
+          void main(){ vec2 q = abs(vUv - 0.5) * 2.0; float e = (1.0 - smoothstep(0.6, 1.0, q.x)) * (1.0 - smoothstep(0.75, 1.0, q.y));
+            gl_FragColor = vec4(color * (0.4 + 0.6 * e), 1.0); }`,
       }),
     );
     box.add(housing, diffuser);
     box.position.copy(light.position);
     box.lookAt(light.target.position);
     this.display.add(box);
-    // Stalak: stup do poda + tri noge.
+    // Stalak iza kućišta (kao pravi softbox na nosaču): stup do poda, kratki nosač
+    // do stražnje strane kućišta i tri noge. Stup ne smije proći kroz difuzor.
     const p = light.position;
-    const poleLen = p.y - S.floorY;
+    const toBack = new THREE.Vector3().subVectors(p, light.target.position).normalize();
+    const mount = p.clone().addScaledVector(toBack, depth + 0.3);
+    const backH = toBack.clone().setY(0).normalize();
+    const base = p.clone().addScaledVector(backH, depth + 9);
+    const poleLen = mount.y + 2 - S.floorY;
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.1, poleLen, 12), poleMat);
-    pole.position.set(p.x, S.floorY + poleLen / 2, p.z - 4);
+    pole.position.set(base.x, S.floorY + poleLen / 2, base.z);
     this.display.add(pole);
+    const top = new THREE.Vector3(base.x, mount.y, base.z);
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 1, 10), poleMat);
+    arm.position.copy(mount).add(top).multiplyScalar(0.5);
+    arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), top.clone().sub(mount).normalize());
+    arm.scale.y = Math.max(1, mount.distanceTo(top));
+    this.display.add(arm);
     for (let i = 0; i < 3; i++) {
       const a = (i / 3) * Math.PI * 2 + 0.4;
       const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 62, 8), poleMat);
-      const foot = new THREE.Vector3(p.x + Math.cos(a) * 42, S.floorY, p.z - 4 + Math.sin(a) * 42);
-      const hip = new THREE.Vector3(p.x, S.floorY + 34, p.z - 4);
+      const foot = new THREE.Vector3(base.x + Math.cos(a) * 42, S.floorY, base.z + Math.sin(a) * 42);
+      const hip = new THREE.Vector3(base.x, S.floorY + 34, base.z);
       leg.position.copy(foot).add(hip).multiplyScalar(0.5);
       leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), hip.clone().sub(foot).normalize());
       leg.scale.y = foot.distanceTo(hip) / 62;
@@ -529,9 +540,9 @@ export class RobotScene {
     this.scaledLights = [this.key, this.fill, this.rimL, this.rimR, this.bgLight, this.topWash].map((l) => [l, l.intensity]);
 
     // Vidljiva oprema studija na mjestima stvarnih svjetala (vidi se s boka i iza).
-    this.#addSoftbox(this.key, 80, 100, 26, new THREE.Color('#fff3e6').multiplyScalar(1.5));
-    this.#addSoftbox(this.rimL, 26, 120, 18, new THREE.Color('#e4ecff').multiplyScalar(1.7));
-    this.#addSoftbox(this.rimR, 26, 120, 18, new THREE.Color('#fff2e6').multiplyScalar(1.5));
+    this.#addSoftbox(this.key, 80, 100, 26, new THREE.Color('#fff3e6').multiplyScalar(2.2));
+    this.#addSoftbox(this.rimL, 26, 120, 18, new THREE.Color('#e4ecff').multiplyScalar(2.8));
+    this.#addSoftbox(this.rimR, 26, 120, 18, new THREE.Color('#fff2e6').multiplyScalar(2.6));
     this.#addSoftbox(this.fill, 60, 80, 22, new THREE.Color('#d8e4ff').multiplyScalar(0.35));
   }
 

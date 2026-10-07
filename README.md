@@ -115,7 +115,9 @@ skulpture / središte glave robota), objekt stoji mirno, a ti kružiš oko njega
   (tanh) na rubovima umjesto naglog zaustavljanja.
 - **Kretanje** ide kroz kritično prigušenu oprugu: ima težinu i inerciju, bez podrhtavanja i bez osjetnog
   kašnjenja. Kamera ne može u pod, strop ni kroz zidove galerije/studija.
-- Pri neutralnom položaju ORBIT kadar je isti kao WINDOW, pa je prebacivanje `M` bez skoka.
+- U neutralnom položaju ORBIT kreće iz istog kadra koji WINDOW daje za glavu u sredini na ~60 cm, a orbita
+  kruto okreće taj kadar oko točke interesa (ona ostaje na istom mjestu na ekranu). Prijelaz tipkom `M` zato
+  je gotovo bez skoka.
 - Panel `T` podešava sve uživo (pojačanje azimuta, maks. kut, pojačanje i maks. elevacije, raspon i
   osjetljivost zooma, mrtvu zonu, krutost opruge); vrijednosti se pamte u pregledniku.
 - `D` debug overlay prikazuje azimut, elevaciju i zoom.

@@ -564,9 +564,8 @@ function frame() {
     // Kamera kruži oko točke interesa; pri neutralnom položaju vidi isto kao window.
     const target = active.orbitTarget(orbitTarget);
     neutralEye.set(rect.cx, rect.cy, REST_DISTANCE);
-    const baseDist = neutralEye.distanceTo(target);
     const vfov = THREE.MathUtils.radToDeg(2 * Math.atan(rect.height / 2 / REST_DISTANCE));
-    orbit.apply(camMono, target, baseDist, vfov, rect.width / rect.height, active.orbitLimits?.() ?? {});
+    orbit.apply(camMono, target, neutralEye, vfov, rect.width / rect.height, active.orbitLimits?.() ?? {});
     if (stereo) orbit.applyStereo(camMono, camLeft, camRight, (settings.ipd / 2) * settings.stereoStrength);
     mono.copy(camMono.position);
   } else {

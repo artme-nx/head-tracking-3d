@@ -100,6 +100,10 @@ class CriticalSpring {
 
 const _dir = new THREE.Vector3();
 const _right = new THREE.Vector3();
+const _base = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
+const _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
 const UP = new THREE.Vector3(0, 1, 0);
 
 export class OrbitController {
@@ -178,13 +182,19 @@ export class OrbitController {
   }
 
   /**
-   * Postavi kameru: orbita oko `target` na udaljenosti `baseDistance × zoom`.
+   * Postavi kameru. U neutralnom položaju kadar je identičan WINDOW kadru (kamera na
+   * neutralnom oku, gleda okomito na ekran), a orbita kruto rotira taj kadar oko
+   * `target`: točka interesa ostaje na istom mjestu na ekranu, pa M nema skoka.
    * @param {THREE.PerspectiveCamera} camera
    */
-  apply(camera, target, baseDistance, vfovDeg, aspect, limits = {}, near = 1, far = 4000) {
-    let el = this.el * DEG;
-    const az = this.az * DEG;
-    let dist = baseDistance * this.zoom;
+  apply(camera, target, neutralEye, vfovDeg, aspect, limits = {}, near = 1, far = 4000) {
+    _base.subVectors(neutralEye, target);
+    const baseDist = Math.max(1, _base.length());
+    const baseAz = Math.atan2(_base.x, _base.z);
+    const baseEl = Math.asin(THREE.MathUtils.clamp(_base.y / baseDist, -1, 1));
+    let el = baseEl + this.el * DEG;
+    const az = baseAz + this.az * DEG;
+    let dist = baseDist * this.zoom;
     // Ograničenja prostora: kamera ne smije u pod/strop niti kroz zidove.
     if (limits.maxRadius) dist = Math.min(dist, limits.maxRadius / Math.max(0.2, Math.cos(el)));
     if (limits.minY !== undefined) {
@@ -195,12 +205,18 @@ export class OrbitController {
       const maxSin = (limits.maxY - target.y) / dist;
       if (Math.sin(el) > maxSin) el = Math.asin(Math.max(-1, Math.min(1, maxSin)));
     }
-    this.effectiveEl = el / DEG;
-    this.distance = dist;
+    this.effectiveEl = (el - baseEl) / DEG;
     _dir.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
     camera.position.copy(target).addScaledVector(_dir, dist);
     camera.up.copy(UP);
     camera.lookAt(target);
+    // Pomak kadra: rotacija iz "gledaj u metu" u WINDOW orijentaciju (identitet) u neutralnom položaju.
+    _m.lookAt(neutralEye, target, UP);
+    _q.setFromRotationMatrix(_m).invert();
+    camera.quaternion.multiply(_q);
+    // Dubina mete duž osi pogleda (za stereo nultu paralaksu).
+    _fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    this.distance = Math.max(1, _base.subVectors(target, camera.position).dot(_fwd));
     camera.fov = vfovDeg;
     camera.aspect = aspect;
     camera.near = near;
