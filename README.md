@@ -7,8 +7,49 @@ Sony Spatial Reality Display).
 
 **Živo:** https://artme-nx.github.io/head-tracking-3d/
 
+| Muzejska vitrina | Odozgo (kaustike, sjena rešetke) | Robot |
+| --- | --- | --- |
+| ![Muzejska vitrina](docs/screenshots/muzej-vitrina.jpg) | ![Vitrina odozgo](docs/screenshots/muzej-odozgo.jpg) | ![Robot](docs/screenshots/robot.jpg) |
+
 Stack: Vite + vanilla JS + Three.js, MediaPipe Tasks Vision (FaceLandmarker),
-Spark (`@sparkjsdev/spark`) za Gaussian splatove.
+Spark (`@sparkjsdev/spark`) za Gaussian splatove, pmndrs `postprocessing` + N8AO
+za AAA scene, meshoptimizer za generiranu geometriju.
+
+## Scene
+
+| Tipka | Scena |
+| --- | --- |
+| `1` | **Kutija** — klasična Johnny Lee kutija s mrežom i metama (jedna izlazi ispred ekrana) |
+| `2` | **Model** — glava na postolju, studijsko svjetlo; prima vlastiti .glb/.gltf/splat |
+| `3` | **Muzejska vitrina** — tamna galerija, stakleni kubus, kromirana giroidna sfera s kristalnom jezgrom |
+| `4` | **Robot** — hard-surface android poprsje čije mehaničke oči gledaju točno u tvoje oči |
+
+### 3 — Muzejska vitrina "Anima Lucis"
+- Kromirana sfera od **giroidne (TPMS) rešetke** generirane u web workeru: SDF → marching cubes →
+  meshoptimizer → normale iz gradijenta SDF-a (savršeno glatki odsjaji kroma).
+- **Kristalna jezgra** s lomom svjetla, kromatskom disperzijom (zaseban IOR za R/G/B) i iridiscencijom;
+  jezgra se vrti suprotno od sfere i "diše".
+- Prava **staklena vitrina**: Fresnel refleksije galerije, vrlo suptilne mrlje i prašina, zelenkasti rubovi
+  stakla, okvir od brušene tamne bronce s vijcima i spojevima, mesingana pločica s graviranim nazivom djela.
+- Muzejski spot uskog snopa s **volumetrijskim haze-om** (raymarch s 3D šumom i pravom sjenom rešetke →
+  zrake svjetla kroz rešetku), lebdeće čestice prašine (neke ispred ravnine ekrana), **animirane kaustike**
+  kristala projicirane na dno vitrine, PCSS sjene, kontaktne sjene, polirani kameni pod s planarnim
+  refleksijama koje su geometrijski točne za položaj tvoje glave.
+
+### 4 — Robot
+- Glava od zasebnih keramičkih/karbonskih panela s **pravim procjepima** (SDF ljuske), kroz procjepe na
+  sljepoočnicama vidi se mehanika; panel linije, natpisi i serijski brojevi; mehanički vrat s kralješcima,
+  hidraulikom (klipnjače klize), pletenim kabelima i rebrastim crijevom.
+- **Oči** su slojevi prave geometrije: duboka duplja s vijcima → kućište → objektiv s gravurom →
+  iris-blenda od 11 lamela → emisivni prstenovi na različitim dubinama → užarena jezgra → staklena
+  rožnica s AR prevlakom → mehanički kapci. Svjetlo iz očiju je pravo svjetlo (obasjava duplju i lice).
+- Oči gledaju **točno u 3D položaj tvojih očiju** (konvergencija za blizu/daleko), uz sakade (kratki
+  pogledi na tvoje lijevo/desno oko i usta), mikrosakade i tremor. Glava i vrat slijede s kašnjenjem i
+  inercijom (opruga s prigušenjem i "servo" mrtvom zonom). Kad se približiš, blenda se sužava i jezgra
+  posvijetli. Povremeno trepće kapcima ili zatvaranjem blende; suptilno "diše".
+- `E` mijenja boju očiju: ledeno cijan ↔ jantarna.
+- **Vlastita glava:** dok si na sceni 4, ispusti .glb/.gltf glave — model sjeda na vrat, dobiva duplje i
+  iste mehaničke oči (automatsko pozicioniranje). `↑`/`↓` fino pomiče oči, `[`/`]` veličina, `R` okret.
 
 ## Pokretanje
 
@@ -79,6 +120,21 @@ iz `window.screenX/Y`, pa je "prozor u svijet" upravo onaj dio ekrana koji prozo
   se zajedno s njim — kamera tada vidi ono što vidi tvoje oko, pa snimka izgleda kao pravi 3D.
 - Za anaglif (`S`) trebaju crveno-cijan naočale (crveno na lijevom oku).
 
+## Kvaliteta i performanse (scene 3 i 4)
+
+- Render: AgX tone mapping, sRGB, fizikalne jedinice svjetla (scena je u cm, intenziteti su skalirani),
+  PMREM okolina iz **Poly Haven HDRI-ja** (`ferndale_studio_11`) kojem se pod zatamni i dodaju
+  softbox trake — kao kartice i zastavice u produktnoj fotografiji.
+- Postprocessing (pmndrs): **N8AO** ambijentalna okluzija, volumetrijski snop, **selektivni bloom** (samo
+  emisivni dijelovi: oči, LED-ice, jezgra kristala), **SMAA**, suptilni film grain i vinjeta.
+  Bez dubinske oštrine — off-axis projekcija mora ostati oštra.
+- Sjene: **PCSS** (meke sjene koje su oštre uz dodir) za spot svjetla + kontaktne sjene.
+- `Q` high: render na nativnoj rezoluciji panela (DPR 1,75 ≈ 2560×1664 na MacBook Airu) uz
+  **dinamičku rezoluciju** koja drži 60 fps (spušta render scale do 1,25 ako treba, pa ga vraća).
+  `Q` low: DPR 1 i lakši efekti.
+- Geometrija (giroid, glava, poprsje) generira se u pozadinskim workerima odmah nakon učitavanja
+  stranice, a shaderi se kompajliraju paralelno pri prvom ulasku u scenu.
+
 ## Kako radi
 
 - **Praćenje** (`src/tracking/`): FaceLandmarker daje središta šarenica (landmarke 468 i 473).
@@ -93,12 +149,26 @@ iz `window.screenX/Y`, pa je "prozor u svijet" upravo onaj dio ekrana koji prozo
   Ravnina ekrana je `z = 0`; objekti iza ekrana imaju negativan z, ispred pozitivan.
 - **Stereo** (`src/render/anaglyph.js`): scena se crta dvaput, iz stvarnog položaja lijevog i
   desnog oka (uzimajući u obzir nagib glave), i spaja u crveno (lijevo) / cijan (desno).
-- **Scene** (`src/scenes/`): kutija s mrežom dubine 50 cm i metama, te studijski preset s
-  modelom na postolju. Jedinice scene su centimetri.
+- **Scene** (`src/scenes/`): kutija s mrežom dubine 50 cm i metama, studijski preset s modelom na
+  postolju, muzejska vitrina (`museum/`) i robot (`robot/`). Jedinice scene su centimetri.
+- **Render** (`src/render/`): postprocessing pipeline, PCSS zakrpa shadera, volumetrijski snop,
+  planarne refleksije, kontaktne sjene, kaustike, prašina, materijali i proceduralne teksture.
+- **Geometrija** (`src/geometry/`): SDF primitive, marching cubes s narrow-band blokovima, worker s
+  meshoptimizer simplifikacijom; modeli giroida i robota.
+
+### Test API
+
+Za automatske testove (Playwright) stranica izlaže `window.__ht`: `setHead([x, y, z])` (položaj glave u cm
+od centra prozora, `null` vraća praćenje), `setPreset(i)`, `setQuality('high'|'low')`, `setStereo(bool)`,
+`benchmark(n)` (ms po frameu bez vsynca) i `state()`.
 
 ## Zasluge
 
 - Model glave: *Lee Perry-Smith* (Infinite Realities), CC BY 3.0, preuzet iz three.js primjera.
+- HDRI `ferndale_studio_11` (Dimitrios Savva, Greg Zaal) i tekstura `grey_plaster` (Rob Tuytel) —
+  [Poly Haven](https://polyhaven.com), CC0.
+- Fontovi Cormorant Garamond i Barlow Condensed — SIL Open Font License.
+- pmndrs `postprocessing` (Zlib), N8AO (ISC), meshoptimizer (MIT).
 - Face Landmarker model: Google MediaPipe (Apache 2.0).
 - Ideja: Johnny Chung Lee, *Head Tracking for Desktop VR Displays using the Wii Remote* (2007);
   Robert Kooima, *Generalized Perspective Projection* (2008).

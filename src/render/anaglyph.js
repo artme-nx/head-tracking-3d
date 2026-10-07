@@ -61,6 +61,13 @@ export class AnaglyphRenderer {
     r.render(this.quadScene, this.quadCamera);
   }
 
+  /** Spoji već iscrtane slike (npr. iz postprocessing pipelinea) na ekran. */
+  combine() {
+    const r = this.renderer;
+    r.setRenderTarget(null);
+    r.render(this.quadScene, this.quadCamera);
+  }
+
   dispose() {
     this.left.dispose();
     this.right.dispose();
