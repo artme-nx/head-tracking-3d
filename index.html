@@ -14,9 +14,9 @@
     <div id="hud" class="hud">
       <div class="hud__status"><span class="dot" id="status-dot"></span><span id="status-text">Pokrećem kameru…</span></div>
       <div class="hud__keys">
-        <kbd>F</kbd> cijeli zaslon <kbd>D</kbd> debug <kbd>C</kbd> kalibracija <kbd>S</kbd> stereo
-        <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> scena <kbd>Q</kbd> kvaliteta <kbd>E</kbd> boja očiju
-        <kbd>M</kbd> miš <kbd>H</kbd> sakrij
+        <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd> scena <kbd>M</kbd> orbit/window <kbd>N</kbd> centar
+        <kbd>T</kbd> orbit panel <kbd>G</kbd> pogled <kbd>E</kbd> boja očiju <kbd>Q</kbd> kvaliteta
+        <kbd>F</kbd> cijeli zaslon <kbd>D</kbd> debug <kbd>C</kbd> kalibracija <kbd>S</kbd> stereo <kbd>K</kbd> miš <kbd>H</kbd> sakrij
       </div>
       <div class="hud__hint">Ispusti .glb / .gltf ili Gaussian splat (.ply / .splat / .spz) bilo gdje u prozor</div>
     </div>
@@ -30,6 +30,7 @@
 
     <div id="drop" class="drop" hidden><div>Ispusti model</div></div>
     <div id="toast" class="toast" hidden></div>
+    <div id="mode-badge" class="mode-badge" hidden></div>
 
     <script type="module" src="/src/main.js"></script>
   </body>

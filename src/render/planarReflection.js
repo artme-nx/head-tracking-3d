@@ -127,7 +127,36 @@ export class PlanarReflection {
     this._pb.set(rect.x1, 2 * y - rect.y1, 0);
     this._pc.set(rect.x0, 2 * y - rect.y0, 0);
     applyOffAxis(this.camera, this._pa, this._pb, this._pc, this._pe, near, far);
+    this.#render(renderer, scene);
+  }
 
+  /**
+   * Za običnu (simetričnu) perspektivnu kameru, npr. ORBIT način: virtualna kamera
+   * je zrcalna slika preko ravnine poda (kao three.js Reflector).
+   */
+  updateFromCamera(renderer, scene, camera) {
+    if (!this.enabled) return;
+    const y = this.planeY;
+    camera.updateMatrixWorld();
+    const pos = this._pe.setFromMatrixPosition(camera.matrixWorld);
+    const fwd = this._pa.set(0, 0, -1).transformDirection(camera.matrixWorld);
+    const up = this._pb.set(0, 1, 0).transformDirection(camera.matrixWorld);
+    const target = this._pc.copy(pos).add(fwd);
+    const cam = this.camera;
+    cam.position.set(pos.x, 2 * y - pos.y, pos.z);
+    target.y = 2 * y - target.y;
+    cam.up.set(up.x, -up.y, up.z);
+    cam.lookAt(target);
+    cam.projectionMatrix.copy(camera.projectionMatrix);
+    cam.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
+    cam.near = camera.near;
+    cam.far = camera.far;
+    cam.updateMatrixWorld(true);
+    this.#render(renderer, scene);
+  }
+
+  #render(renderer, scene) {
+    const y = this.planeY;
     this.uniforms.reflectMatrix.value
       .copy(bias)
       .multiply(this.camera.projectionMatrix)

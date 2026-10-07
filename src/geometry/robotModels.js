@@ -267,8 +267,8 @@ function torsoSolid(x, y, z) {
   d = smin(d, sdCapsule(ax, y, z, 1.5, -24.6, -2.2, 12.5, -24.2, -4.6, 1.3), 1.6);
   // Otvor za vrat.
   d = smax(d, -sdCylinderY(x, y + 21.5, z + 6.4, 4.7, 3.0, 0.8), 0.7);
-  // Rez dolje (ispod kadra).
-  d = smax(d, -y - 44, 0.5);
+  // Rez dolje (dovoljno nisko da se ni u ORBIT načinu ne vidi).
+  d = smax(d, -y - 57, 0.5);
   return d;
 }
 
@@ -284,7 +284,7 @@ function regionShoulder(x, y, z) {
 export function robotBodyModel({ step = 0.14 } = {}) {
   return {
     pieces: ['chest', 'shoulders', 'trapezius', 'core'],
-    bounds: [-24, -45, -20, 24, -17, 4],
+    bounds: [-24, -58.5, -20, 24, -17, 4],
     step,
     block: 8,
     cullMargin: 0.4,

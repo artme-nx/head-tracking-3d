@@ -19,6 +19,8 @@ import { RobotScene } from './scenes/robot/robotScene.js';
 import { classifyFiles, loadDefaultHead, loadMeshFiles, loadSplatFile } from './scenes/loaders.js';
 import { DebugOverlay } from './ui/debugOverlay.js';
 import { CalibrationPanel } from './ui/calibrationPanel.js';
+import { OrbitPanel } from './ui/orbitPanel.js';
+import { OrbitController, loadOrbitSettings } from './camera/orbitController.js';
 import { Hud } from './ui/hud.js';
 import { setupDropzone } from './ui/dropzone.js';
 import './style.css';
@@ -28,7 +30,21 @@ const NEAR = 0.5;
 const FAR = 2000;
 
 const settings = loadSettings();
+const orbitSettings = loadOrbitSettings();
 installPCSS();
+
+// Način kamere po sceni: 'window' (fizički točna off-axis projekcija) ili 'orbit'.
+// ORBIT je zadan za Vitrinu i Robota; Kutija podržava samo window.
+const CAMERA_MODES_KEY = 'head-tracking-3d:cameraModes:v1';
+let cameraModes = { 0: 'window', 1: 'window', 2: 'orbit', 3: 'orbit' };
+try {
+  const saved = JSON.parse(localStorage.getItem(CAMERA_MODES_KEY) ?? 'null');
+  if (saved) cameraModes = { ...cameraModes, ...saved, 0: 'window' };
+} catch {
+  /* bez pohrane */
+}
+// Ponašanje pogleda robota (G): 1 = prati do ±25°, 2 = oči uvijek prate, 3 = glava i oči prate.
+const gazeModes = { orbit: 1, window: 3 };
 
 const QUALITY_KEY = 'head-tracking-3d:quality';
 let quality = 'high';
@@ -203,6 +219,7 @@ function switchTo(next, index) {
   if (usesPost) active.setQuality?.(QUALITY[quality]);
   laidOut = { w: 0, h: 0 }; // forsiraj layout za novu scenu
   hud.toast(`Scena ${index + 1}: ${active.name}`, 1400);
+  if (active.orbitTarget) hud.badge(cameraMode() === 'orbit' ? 'ORBIT' : 'WINDOW');
   // AAA scene imaju puno materijala: kompajliraj ih paralelno (KHR_parallel_shader_compile)
   // umjesto da prvi frame zamrzne praćenje glave.
   if (usesPost && !active.compiled) {
@@ -242,6 +259,33 @@ const panel = new CalibrationPanel(settings, (s) => {
   tracker.applySettings(s);
   laidOut = { w: 0, h: 0 };
 });
+const orbit = new OrbitController(orbitSettings);
+const orbitPanel = new OrbitPanel(orbitSettings, () => {});
+
+function activeIndex() {
+  return presets.indexOf(active);
+}
+
+function cameraMode() {
+  if (!active?.orbitTarget) return 'window';
+  return cameraModes[activeIndex()] ?? 'window';
+}
+
+function setCameraMode(mode) {
+  if (!active?.orbitTarget) {
+    hud.badge('WINDOW');
+    hud.toast('Ova scena podržava samo window način', 1600);
+    return;
+  }
+  cameraModes[activeIndex()] = mode;
+  try {
+    localStorage.setItem(CAMERA_MODES_KEY, JSON.stringify(cameraModes));
+  } catch {
+    /* bez pohrane */
+  }
+  if (mode === 'orbit' && !orbit.neutral) orbit.recalibrate(performance.now(), 1.0);
+  hud.badge(mode === 'orbit' ? 'ORBIT' : 'WINDOW');
+}
 
 let stereo = false;
 let mouseMode = false;
@@ -290,7 +334,7 @@ setupDropzone(async (files) => {
     presets[1].setContent(obj, picked.kind);
     setPreset(1);
     laidOut = { w: 0, h: 0 };
-    hud.toast(`${picked.main.name} učitan · R okreni · [ ] veličina · T vrtnja`, 3500);
+    hud.toast(`${picked.main.name} učitan · R okreni · [ ] veličina · V vrtnja`, 3500);
   } catch (err) {
     console.error(err);
     hud.toast(`Ne mogu učitati ${picked.main.name}: ${err.message ?? err}`, 5000);
@@ -309,19 +353,42 @@ window.addEventListener('keydown', (e) => {
       break;
     case 'c':
       panel.toggle();
+      if (panel.visible) orbitPanel.toggle(false);
       break;
+    case 't':
+      orbitPanel.toggle();
+      if (orbitPanel.visible) panel.toggle(false);
+      break;
+    case 'n':
+      orbit.recalibrate(performance.now(), 0.6);
+      hud.toast('Centar: trenutni položaj glave', 1400);
+      break;
+    case 'g': {
+      const mode = cameraMode();
+      gazeModes[mode] = (gazeModes[mode] % 3) + 1;
+      const labels = {
+        1: 'Pogled: oči prate do ±25°, zatim gledaju naprijed',
+        2: 'Pogled: oči uvijek prate',
+        3: 'Pogled: glava i oči prate',
+      };
+      hud.toast(labels[gazeModes[mode]], 1800);
+      break;
+    }
     case 's':
       stereo = !stereo;
       hud.toast(stereo ? 'Anaglif uključen — crveno lijevo, cijan desno' : 'Anaglif isključen', 1600);
       break;
     case 'm':
+      setCameraMode(cameraMode() === 'orbit' ? 'window' : 'orbit');
+      break;
+    case 'k':
       mouseMode = !mouseMode;
       hud.toast(mouseMode ? 'Miš glumi glavu' : 'Praćenje kamerom', 1400);
       break;
     case 'h':
       hud.toggle();
       break;
-    case 't':
+    case 'v':
       presets[1].turntable = !presets[1].turntable;
       break;
     case 'r':
@@ -360,6 +427,7 @@ window.addEventListener('keydown', (e) => {
       break;
     case 'escape':
       panel.toggle(false);
+      orbitPanel.toggle(false);
       break;
   }
 });
@@ -374,6 +442,27 @@ const pose = {
 
 const smoothstep = (x) => x * x * (3 - 2 * x);
 
+// Neutralni položaj za ORBIT: kalibrira se automatski kad se lice pronađe
+// (i nakon duljeg gubitka), ručno tipkom N; za miš je centar prozora.
+const orbitState = { source: null, lostSince: 0, wasTracking: false };
+
+function updateOrbitCalibration(now, source, rect) {
+  const rest = new THREE.Vector3(rect.cx, rect.cy, REST_DISTANCE);
+  if (source !== orbitState.source) {
+    if (source === 'miš' || source === 'test') orbit.setNeutral(rest);
+    orbitState.source = source;
+  }
+  if (source === 'kamera' || source === 'centar') {
+    const tracking = source === 'kamera';
+    if (tracking && !orbitState.wasTracking) {
+      // Lice pronađeno: kalibriraj ako je to prvi put ili nakon duljeg gubitka.
+      if (!orbit.neutral || now - orbitState.lostSince > 2500) orbit.recalibrate(now, 1.4);
+    }
+    if (!tracking && orbitState.wasTracking) orbitState.lostSince = now;
+    orbitState.wasTracking = tracking;
+  }
+}
+
 function updatePose(now, dt, rect) {
   const rest = [rect.cx, rect.cy, REST_DISTANCE];
   let source;
@@ -383,6 +472,8 @@ function updatePose(now, dt, rect) {
     pose.eye[0] = rect.cx + headOverride[0];
     pose.eye[1] = rect.cy + headOverride[1];
     pose.eye[2] = headOverride[2];
+    pose.tracked = [...pose.eye];
+    pose.weight = 1;
     pose.roll = 0;
     hud.setStatus('mouse', 'Test položaj glave');
     return 'test';
@@ -430,6 +521,9 @@ const eyeC = new THREE.Vector3();
 const eyeL = new THREE.Vector3();
 const eyeR = new THREE.Vector3();
 const half = new THREE.Vector3();
+const orbitHead = new THREE.Vector3();
+const orbitTarget = new THREE.Vector3();
+const neutralEye = new THREE.Vector3();
 let lastFrame = performance.now();
 let t = 0;
 
@@ -448,38 +542,63 @@ function frame() {
     laidOut = { w: rect.width, h: rect.height };
   }
   world.position.set(rect.cx, rect.cy, 0);
+  world.updateMatrixWorld(true);
   const source = updatePose(now, dt, rect);
+  updateOrbitCalibration(now, source, rect);
+  // ORBIT ulaz: zadnji praćeni položaj glave; težina pada na 0 kad se lice izgubi.
+  orbitHead.fromArray(source === 'test' ? pose.eye : pose.tracked);
+  const orbitWeight = source === 'kamera' || source === 'centar' ? smoothstep(pose.weight) : 1;
+  orbit.update(now, dt, orbitHead, orbitWeight);
   if (compiling) {
     debug.tick(now);
     return;
   }
-  active.update(t, dt, { eye: pose.eye, rect });
 
-  // Kutovi prozora na ravnini z = 0.
-  pa.set(rect.x0, rect.y0, 0);
-  pb.set(rect.x1, rect.y0, 0);
-  pc.set(rect.x0, rect.y1, 0);
-
+  const mode = cameraMode();
   // Oči: centar ± pola IPD-a duž linije očiju (uzima u obzir nagib glave).
   eyeC.fromArray(pose.eye);
   half.set(Math.cos(pose.roll), Math.sin(pose.roll), 0).multiplyScalar(settings.ipd / 2);
-
   const mono = eyeC.clone();
-  if (settings.eye === 'left') mono.sub(half);
-  if (settings.eye === 'right') mono.add(half);
-  applyOffAxis(camMono, pa, pb, pc, mono, NEAR, FAR);
-  if (stereo) {
-    const k = settings.stereoStrength;
-    eyeL.copy(eyeC).addScaledVector(half, -k);
-    eyeR.copy(eyeC).addScaledVector(half, k);
-    applyOffAxis(camLeft, pa, pb, pc, eyeL, NEAR, FAR);
-    applyOffAxis(camRight, pa, pb, pc, eyeR, NEAR, FAR);
+
+  if (mode === 'orbit') {
+    // Kamera kruži oko točke interesa; pri neutralnom položaju vidi isto kao window.
+    const target = active.orbitTarget(orbitTarget);
+    neutralEye.set(rect.cx, rect.cy, REST_DISTANCE);
+    const baseDist = neutralEye.distanceTo(target);
+    const vfov = THREE.MathUtils.radToDeg(2 * Math.atan(rect.height / 2 / REST_DISTANCE));
+    orbit.apply(camMono, target, baseDist, vfov, rect.width / rect.height, active.orbitLimits?.() ?? {});
+    if (stereo) orbit.applyStereo(camMono, camLeft, camRight, (settings.ipd / 2) * settings.stereoStrength);
+    mono.copy(camMono.position);
+  } else {
+    // Kutovi prozora na ravnini z = 0.
+    pa.set(rect.x0, rect.y0, 0);
+    pb.set(rect.x1, rect.y0, 0);
+    pc.set(rect.x0, rect.y1, 0);
+    if (settings.eye === 'left') mono.sub(half);
+    if (settings.eye === 'right') mono.add(half);
+    applyOffAxis(camMono, pa, pb, pc, mono, NEAR, FAR);
+    if (stereo) {
+      const k = settings.stereoStrength;
+      eyeL.copy(eyeC).addScaledVector(half, -k);
+      eyeR.copy(eyeC).addScaledVector(half, k);
+      applyOffAxis(camLeft, pa, pb, pc, eyeL, NEAR, FAR);
+      applyOffAxis(camRight, pa, pb, pc, eyeR, NEAR, FAR);
+    }
   }
+
+  active.update(t, dt, {
+    eye: mode === 'orbit' ? camMono.position.toArray() : pose.eye,
+    rect,
+    cameraMode: mode,
+    gazeMode: gazeModes[mode],
+  });
 
   if (active.usesPost) {
     // Sjene se računaju jednom po frameu (refleksija, oba oka i bloom ih dijele).
     renderer.shadowMap.needsUpdate = true;
-    profiler.measure('beforeRender', () => active.beforeRender?.(renderer, scene, stereo ? eyeC : mono, rect));
+    profiler.measure('beforeRender', () =>
+      active.beforeRender?.(renderer, scene, mode === 'orbit' || !stereo ? mono : eyeC, rect, camMono, mode),
+    );
     const p = getPost();
     if (stereo) {
       p.render(camLeft, dt, anaglyph.left);
@@ -496,8 +615,13 @@ function frame() {
 
   profiler.poll();
   debug.tick(now);
-  debug.draw({ tracker, source, eye: pose.eye, rect, stereo, sceneName: active.name, quality: active.usesPost ? `${quality} ${renderer.getPixelRatio().toFixed(2)}×` : null });
+  const orbitInfo =
+    mode === 'orbit'
+      ? `ORBIT az ${orbit.az.toFixed(1)}° el ${(orbit.effectiveEl ?? orbit.el).toFixed(1)}° zoom ${(1 / orbit.zoom).toFixed(2)}×${orbit.calibrating ? ' · kalibriram' : ''}`
+      : 'WINDOW';
+  debug.draw({ tracker, source, eye: pose.eye, rect, stereo, sceneName: active.name, quality: active.usesPost ? `${quality} ${renderer.getPixelRatio().toFixed(2)}×` : null, orbitInfo });
   panel.showMeasurement(pose.eye, source);
+  orbitPanel.showState(mode === 'orbit' ? orbitInfo : 'Trenutna scena je u WINDOW načinu (M za orbit).');
 }
 renderer.setAnimationLoop(frame);
 
@@ -522,6 +646,11 @@ window.__ht = {
   setPreset: (i) => setPreset(i),
   setQuality: (q) => setQuality(q),
   setStereo: (b) => (stereo = !!b),
+  setCameraMode: (m) => setCameraMode(m),
+  setGazeMode: (n) => (gazeModes[cameraMode()] = n),
+  /** Orbit bez glave: { az, el, zoom } (zoom = faktor udaljenosti), null vraća upravljanje glavi. */
+  setOrbit: (o) => (orbit.override = o ? { snap: true, ...o } : null),
+  orbit,
   state: () => ({
     fps: debug.fps,
     scene: active?.name,

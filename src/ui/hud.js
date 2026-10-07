@@ -8,6 +8,20 @@ export class Hud {
     this.toastEl = document.getElementById('toast');
     this.state = '';
     this.toastTimer = 0;
+    this.badgeEl = document.getElementById('mode-badge');
+    this.badgeTimer = 0;
+  }
+
+  /** Kratki prikaz načina kamere u kutu (ORBIT / WINDOW). */
+  badge(text, ms = 1100) {
+    clearTimeout(this.badgeTimer);
+    this.badgeEl.textContent = text;
+    this.badgeEl.hidden = false;
+    this.badgeEl.classList.remove('is-out');
+    this.badgeTimer = setTimeout(() => {
+      this.badgeEl.classList.add('is-out');
+      this.badgeTimer = setTimeout(() => (this.badgeEl.hidden = true), 300);
+    }, ms);
   }
 
   toggle() {

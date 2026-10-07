@@ -20,7 +20,7 @@ import {
   stoneMaterial,
   microcementMaterial,
 } from '../../render/materials.js';
-import { createGlassSmudgeTexture, createBrushedTexture, createPlaqueTextures } from '../../render/proceduralTextures.js';
+import { createGlassSmudgeTexture, createBrushedTexture, createPlaqueTextures, createLabelTexture } from '../../render/proceduralTextures.js';
 
 const BG = new THREE.Color('#030304');
 
@@ -36,14 +36,17 @@ const CANDELA = 1e4; // jedinice scene su cm → intenzitet × 100² za fizički
 
 // Raspored (cm, ishodište = centar prozora na ravnini ekrana).
 const L = {
-  floorY: -34,
+  floorY: -105, // monolit ~90 cm, kao pravo muzejsko postolje
   centerZ: -58,
   monolith: { w: 30, d: 30, top: -15.5 },
   base: { w: 26.4, d: 26.4, h: 3.0 },
   glass: { w: 25, d: 25, h: 21, t: 0.55 },
   sphere: { r: 7, gap: 2.0 },
   puck: { r: 2.6, h: 1.4 },
-  backWallZ: -230,
+  backWallZ: -440,
+  // Galerija je dovoljno velika da ORBIT kamera nikad ne uđe u zidove.
+  room: { x: 300, front: 260, ceiling: 175 },
+  door: { z: -170, w: 120, h: 230 }, // prolaz u susjednu dvoranu (desni zid)
 };
 
 export class MuseumScene {
@@ -123,6 +126,7 @@ export class MuseumScene {
     const brush = createBrushedTexture(3);
 
     this.#buildRoom({ diff, rough, nor });
+    await this.#buildGalleryDetails(brush);
     this.#buildPedestal(brush, plaque);
     this.#buildVitrine(smudge, brush);
     this.#buildSculpture(geo, brush);
@@ -132,37 +136,181 @@ export class MuseumScene {
   }
 
   #buildRoom(wallTex) {
+    const R = L.room;
+    const depth = R.front - L.backWallZ;
+    const midZ = (R.front + L.backWallZ) / 2;
+    const height = R.ceiling - L.floorY;
+    const midY = (R.ceiling + L.floorY) / 2;
+
     const floorMat = stoneMaterial({ polished: true, tiles: 80, color: '#0c0c0e' });
-    this.floor = new THREE.Mesh(new THREE.PlaneGeometry(500, 400).rotateX(-Math.PI / 2), floorMat);
-    this.floor.position.set(0, L.floorY, -100);
+    this.floor = new THREE.Mesh(new THREE.PlaneGeometry(2 * R.x + 220, depth + 20).rotateX(-Math.PI / 2), floorMat);
+    this.floor.position.set(0, L.floorY, midZ);
     this.floor.receiveShadow = true;
     this.display.add(this.floor);
 
-    const wallMat = microcementMaterial(wallTex, 4);
-    const back = new THREE.Mesh(new THREE.PlaneGeometry(400, 160), wallMat);
-    back.position.set(0, L.floorY + 80, L.backWallZ);
-    back.receiveShadow = true;
-    this.display.add(back);
-    const sideMat = microcementMaterial({ diff: wallTex.diff.clone(), rough: wallTex.rough.clone(), nor: wallTex.nor.clone() }, 3);
-    for (const sx of [-1, 1]) {
-      const side = new THREE.Mesh(new THREE.PlaneGeometry(260, 160), sideMat);
-      side.rotation.y = -sx * Math.PI / 2;
-      side.position.set(sx * 130, L.floorY + 80, L.backWallZ + 130);
+    const wallMat = microcementMaterial(wallTex, 6);
+    const wall = (w, h, x, y, z, rotY) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+      m.position.set(x, y, z);
+      m.rotation.y = rotY;
+      m.receiveShadow = true;
+      this.display.add(m);
+      return m;
+    };
+    wall(2 * R.x, height, 0, midY, L.backWallZ, 0);
+    wall(depth, height, -R.x, midY, midZ, Math.PI / 2);
+    wall(2 * R.x, height, 0, midY, R.front, Math.PI);
+    // Desni zid s otvorom za prolaz: tri panela oko vrata.
+    const D = L.door;
+    const z0 = D.z - D.w / 2, z1 = D.z + D.w / 2;
+    const lenBack = z0 - L.backWallZ, lenFront = R.front - z1;
+    wall(lenBack, height, R.x, midY, L.backWallZ + lenBack / 2, -Math.PI / 2);
+    wall(lenFront, height, R.x, midY, z1 + lenFront / 2, -Math.PI / 2);
+    wall(D.w, height - D.h, R.x, L.floorY + D.h + (height - D.h) / 2, D.z, -Math.PI / 2);
+
+    const ceiling = new THREE.Mesh(
+      new THREE.PlaneGeometry(2 * R.x, depth).rotateX(Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: '#08080a', roughness: 0.95 }),
+    );
+    ceiling.position.set(0, R.ceiling, midZ);
+    this.display.add(ceiling);
+
+    // Sokl (tamna fuga) uz dno svih zidova — arhitektonsko mjerilo.
+    const sokl = new THREE.MeshStandardMaterial({ color: '#020203', roughness: 0.6 });
+    const strip = (w, x, z, rotY) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, 1.4, 1.4), sokl);
+      m.position.set(x, L.floorY + 0.7, z);
+      m.rotation.y = rotY;
+      this.display.add(m);
+    };
+    strip(2 * R.x, 0, L.backWallZ + 0.7, 0);
+    strip(depth, -R.x + 0.7, midZ, Math.PI / 2);
+    strip(depth, R.x - 0.7, midZ, Math.PI / 2);
+
+    // Stropne tračnice s reflektorima (jedan od njih je izvor glavnog snopa).
+    const trackMat = new THREE.MeshStandardMaterial({ color: '#0d0d0f', roughness: 0.4, metalness: 0.6 });
+    for (const z of [-163, -60, -300]) {
+      const track = new THREE.Mesh(new THREE.BoxGeometry(2 * R.x - 40, 2.2, 3.2), trackMat);
+      track.position.set(0, R.ceiling - 1.2, z);
+      this.display.add(track);
+    }
+    this.trackMat = trackMat;
+  }
+
+  /** Detalji galerije oko vitrine: natpis izložbe, prolaz, dva sporedna izloška. */
+  async #buildGalleryDetails(brush) {
+    const R = L.room;
+    // --- Lijevi zid: naslov izložbe (vinil slova na zidu) ---
+    const titleTex = await createLabelTexture(
+      [
+        { text: 'ANIMA LUCIS', font: '600 200px "Cormorant Garamond", Georgia, serif' },
+        { text: 'svjetlo · struktura · praznina', font: 'italic 500 92px "Cormorant Garamond", Georgia, serif' },
+        { text: 'DVORANA III  ·  2026', font: '500 60px "Cormorant Garamond", Georgia, serif' },
+      ],
+      { w: 2048, h: 760, align: 'left', spacing: '14px' },
+    );
+    const title = new THREE.Mesh(
+      new THREE.PlaneGeometry(105, 105 * (760 / 2048)),
+      new THREE.MeshStandardMaterial({ color: '#bdb8af', map: titleTex, transparent: true, roughness: 0.6, metalness: 0 }),
+    );
+    title.position.set(-R.x + 0.6, 22, -235);
+    title.rotation.y = Math.PI / 2;
+    this.display.add(title);
+
+    // --- Desni zid: prolaz u susjednu dvoranu s toplim svjetlom ---
+    const doorW = L.door.w, doorH = L.door.h, doorZ = L.door.z;
+    const frameMat = new THREE.MeshStandardMaterial({ color: '#050506', roughness: 0.35, metalness: 0.7 });
+    const glow = new THREE.Mesh(
+      new THREE.PlaneGeometry(doorW, doorH),
+      new THREE.ShaderMaterial({
+        uniforms: { color: { value: new THREE.Color('#ffc890').multiplyScalar(0.22) } },
+        vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+        // Svjetlo iz susjedne dvorane: svjetlija mrlja nisko (pod), tamnije prema stropu i rubovima.
+        fragmentShader: `uniform vec3 color; varying vec2 vUv;
+          void main(){
+            float floorGlow = exp(-pow((vUv.y - 0.12) / 0.32, 2.0));
+            float side = 1.0 - smoothstep(0.15, 0.5, abs(vUv.x - 0.5));
+            float g = (0.25 + 0.75 * floorGlow) * (0.35 + 0.65 * side) * (1.0 - 0.6 * vUv.y);
+            gl_FragColor = vec4(color * g, 1.0); }`,
+      }),
+    );
+    glow.position.set(R.x + 95, L.floorY + doorH / 2, doorZ);
+    glow.rotation.y = -Math.PI / 2;
+    this.display.add(glow);
+    // Dubina otvora: tamni bočni zidovi prolaza i tanki čelični okvir.
+    const reveal = new THREE.MeshStandardMaterial({ color: '#141416', roughness: 0.9 });
+    // Kratki hodnik (95 cm) — toplo svjetlo sa dna hodnika osvjetljava njegove stijenke.
+    for (const dz of [-doorW / 2, doorW / 2]) {
+      const side = new THREE.Mesh(new THREE.PlaneGeometry(95, doorH), reveal);
+      side.position.set(R.x + 47.5, L.floorY + doorH / 2, doorZ + dz);
+      side.rotation.y = dz < 0 ? 0 : Math.PI;
       this.display.add(side);
     }
-    const ceiling = new THREE.Mesh(
-      new THREE.PlaneGeometry(400, 300).rotateX(Math.PI / 2),
-      new THREE.MeshLambertMaterial({ color: '#050506' }),
-    );
-    ceiling.position.set(0, 95, -100);
-    this.display.add(ceiling);
-    // Tanka sjena-fuga na dnu zida (sokl) — arhitektonski detalj za mjerilo.
-    const plinth = new THREE.Mesh(
-      new THREE.BoxGeometry(400, 1.2, 1.2),
-      new THREE.MeshStandardMaterial({ color: '#020203', roughness: 0.6 }),
-    );
-    plinth.position.set(0, L.floorY + 0.6, L.backWallZ + 0.6);
-    this.display.add(plinth);
+    const top = new THREE.Mesh(new THREE.PlaneGeometry(95, doorW).rotateX(Math.PI / 2), reveal);
+    top.position.set(R.x + 47.5, L.floorY + doorH, doorZ);
+    this.display.add(top);
+    this.doorLight = new THREE.PointLight('#ffc890', 0.9 * CANDELA, 150, 2);
+    this.doorLight.position.set(R.x + 80, L.floorY + 60, doorZ);
+    this.display.add(this.doorLight);
+    const fr = (w, h, d, x, y, z) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), frameMat);
+      m.position.set(x, y, z);
+      this.display.add(m);
+    };
+    fr(2.4, doorH + 3, 2.4, R.x - 0.6, L.floorY + doorH / 2, doorZ - doorW / 2 - 1.2);
+    fr(2.4, doorH + 3, 2.4, R.x - 0.6, L.floorY + doorH / 2, doorZ + doorW / 2 + 1.2);
+    fr(2.4, 2.4, doorW + 4.8, R.x - 0.6, L.floorY + doorH + 1.2, doorZ);
+
+    // --- Izložak A: brončani torusni čvor na visokom svijetlom postolju ---
+    const plinthLight = stoneMaterial({ polished: false, color: '#9d988f' });
+    const pA = new THREE.Mesh(new RoundedBoxGeometry(36, 112, 36, 3, 0.4), plinthLight);
+    pA.position.set(-150, L.floorY + 56, -255);
+    pA.castShadow = pA.receiveShadow = true;
+    this.display.add(pA);
+    const bronzeDark = new THREE.MeshPhysicalMaterial({
+      color: '#5d4127',
+      metalness: 1,
+      roughness: 0.32,
+      envMap: this.env,
+      envMapIntensity: 0.9,
+      clearcoat: 0.3,
+    });
+    const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(10, 2.7, 320, 40, 2, 3), bronzeDark);
+    knot.position.set(-150, L.floorY + 112 + 15, -255);
+    knot.rotation.set(0.4, 0.6, 0.2);
+    knot.castShadow = true;
+    this.display.add(knot);
+    this.knot = knot;
+
+    // --- Izložak B: crni polirani mramorni ovoid na niskom postolju ---
+    const pB = new THREE.Mesh(new RoundedBoxGeometry(56, 46, 56, 3, 0.4), stoneMaterial({ polished: false, color: '#121214' }));
+    pB.position.set(185, L.floorY + 23, -285);
+    pB.castShadow = pB.receiveShadow = true;
+    this.display.add(pB);
+    const marble = new THREE.MeshPhysicalMaterial({
+      color: '#0b0b0d',
+      roughness: 0.08,
+      metalness: 0,
+      clearcoat: 1,
+      clearcoatRoughness: 0.04,
+      envMap: this.env,
+      envMapIntensity: 1.1,
+    });
+    const ovoid = new THREE.Mesh(new THREE.SphereGeometry(14, 96, 64), marble);
+    ovoid.scale.set(1, 1.32, 0.86);
+    ovoid.position.set(185, L.floorY + 46 + 14 * 1.32, -285);
+    ovoid.castShadow = true;
+    this.display.add(ovoid);
+
+    // Kontaktne sjene ispod sporednih izložaka (statične).
+    this.exhibitShadows = [];
+    for (const [x, z, y, w, far] of [[-150, -255, L.floorY + 112, 34, 30], [185, -285, L.floorY + 46, 46, 40], [-150, -255, L.floorY, 50, 20], [185, -285, L.floorY, 72, 20]]) {
+      const cs = new ContactShadows({ width: w, depth: w, far, resolution: 256, blur: 3, opacity: 0.85 });
+      cs.group.position.set(x, y + 0.03, z);
+      this.display.add(cs.group);
+      this.exhibitShadows.push(cs);
+    }
+    for (const o of [knot, ovoid, pA, pB]) o.layers.enable(CONTACT_LAYER);
   }
 
   #buildPedestal(brush, plaque) {
@@ -386,11 +534,13 @@ export class MuseumScene {
 
   #buildLights() {
     // Glavni muzejski spot: odozgo-straga-lijevo, uski snop, PCSS sjene, volumetrija.
-    this.key = new THREE.SpotLight('#fff1e0', 30 * CANDELA, 0, THREE.MathUtils.degToRad(7.5), 0.38, 2);
-    this.key.position.set(-30, 66, L.centerZ - 42);
+    // Isti smjer kao prije, ali izvor je reflektor na stropnoj tračnici (dulji vidljivi snop).
+    this.key = new THREE.SpotLight('#fff1e0', 176 * CANDELA, 0, THREE.MathUtils.degToRad(5.6), 0.38, 2);
+    this.key.position.set(-74, 170, L.centerZ - 107);
     this.key.target.position.set(1, -7, L.centerZ + 2);
     configurePCSSSpot(this.key, 3.2, 2048);
     this.display.add(this.key, this.key.target);
+    this.#addFixture(this.key);
 
     // Kaustike: projektor iz kristala prema dnu vitrine (cookie = animirana tekstura).
     this.caustics = new CausticsTexture(512);
@@ -408,20 +558,63 @@ export class MuseumScene {
     this.display.add(this.fill, this.fill.target);
 
     // Svjetlo na stražnjem zidu (mekani "pool" iza vitrine).
-    this.wallWash = new THREE.SpotLight('#dfe7ff', 9 * CANDELA, 0, THREE.MathUtils.degToRad(22), 1, 2);
-    this.wallWash.position.set(10, 90, -130);
-    this.wallWash.target.position.set(-4, 0, L.backWallZ);
+    this.wallWash = new THREE.SpotLight('#dfe7ff', 15 * CANDELA, 0, THREE.MathUtils.degToRad(17), 1, 2);
+    this.wallWash.position.set(10, 168, -250);
+    this.wallWash.target.position.set(-4, 15, L.backWallZ);
     this.display.add(this.wallWash, this.wallWash.target);
 
-    // Slabo svjetlo iznutra — unutarnje stijenke rešetke hvataju sjaj kristala.
-    this.inner = new THREE.PointLight('#fff2df', 0.35 * CANDELA * 0.01, 14, 2);
-    this.sculpture.add(this.inner);
+    // Bočni kicker zdesna-straga: desni profil vitrine i sfere nije "mrtva" strana.
+    this.kicker = new THREE.SpotLight('#dbe6ff', 26 * CANDELA, 0, THREE.MathUtils.degToRad(9), 0.8, 2);
+    this.kicker.position.set(118, 165, -175);
+    this.kicker.target.position.set(0, -6, L.centerZ);
+    this.display.add(this.kicker, this.kicker.target);
+    this.#addFixture(this.kicker);
+
+    // Galerijska rasvjeta: naslov na lijevom zidu i dva sporedna izloška.
+    this.titleWash = new THREE.SpotLight('#fff0dc', 13 * CANDELA, 0, THREE.MathUtils.degToRad(26), 1, 2);
+    this.titleWash.position.set(-185, 168, -235);
+    this.titleWash.target.position.set(-L.room.x, 25, -235);
+    this.display.add(this.titleWash, this.titleWash.target);
+    this.spotA = new THREE.SpotLight('#ffe9cc', 52 * CANDELA, 0, THREE.MathUtils.degToRad(11), 0.6, 2);
+    this.spotA.position.set(-150, 170, -215);
+    this.spotA.target.position.set(-150, L.floorY + 120, -255);
+    this.display.add(this.spotA, this.spotA.target);
+    this.#addFixture(this.spotA);
+    this.spotB = new THREE.SpotLight('#fff3e6', 70 * CANDELA, 0, THREE.MathUtils.degToRad(12), 0.6, 2);
+    this.spotB.position.set(185, 170, -250);
+    this.spotB.target.position.set(185, L.floorY + 55, -285);
+    this.display.add(this.spotB, this.spotB.target);
+    this.#addFixture(this.spotB);
 
     this.hemi = new THREE.HemisphereLight('#1a1d22', '#060606', 0.12);
     this.display.add(this.hemi);
 
     // Intenziteti točkastih/spot svjetala skaliraju se s s² kad se kompozicija skalira.
-    this.scaledLights = [this.key, this.causticLight, this.wallWash, this.inner, this.fill].map((l) => [l, l.intensity]);
+    this.scaledLights = [this.key, this.causticLight, this.wallWash, this.fill, this.kicker, this.titleWash, this.spotA, this.spotB, this.doorLight].filter(Boolean).map((l) => [l, l.intensity]);
+  }
+
+  /** Tijelo reflektora na stropnoj tračnici, usmjereno prema cilju svjetla. */
+  #addFixture(light) {
+    const body = new THREE.Group();
+    const can = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 2.6, 11, 32, 1, true), this.trackMat);
+    const back = new THREE.Mesh(new THREE.CircleGeometry(3.2, 32), this.trackMat);
+    back.position.y = 5.5;
+    back.rotation.x = -Math.PI / 2;
+    const lens = new THREE.Mesh(
+      new THREE.CircleGeometry(2.4, 32),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color('#fff4e6').multiplyScalar(6), toneMapped: false }),
+    );
+    lens.position.y = -5.4;
+    lens.rotation.x = Math.PI / 2;
+    body.add(can, back, lens);
+    body.position.copy(light.position);
+    const dir = new THREE.Vector3().subVectors(light.target.position, light.position).normalize();
+    body.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir);
+    // Nosač do tračnice.
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, Math.max(1, L.room.ceiling - light.position.y), 10), this.trackMat);
+    stem.position.set(light.position.x, (L.room.ceiling + light.position.y) / 2, light.position.z);
+    this.display.add(body, stem);
+    (this.fixtures ??= []).push(lens);
   }
 
   #buildEffects() {
@@ -439,8 +632,8 @@ export class MuseumScene {
     this.reflection.hide = [this.floor, ...this.glassPanes];
 
     this.dust = new DustMotes({
-      count: 520,
-      box: new THREE.Box3(new THREE.Vector3(-34, -12, L.centerZ - 50), new THREE.Vector3(20, 40, L.centerZ + 18)),
+      count: 900,
+      box: new THREE.Box3(new THREE.Vector3(-80, -14, L.centerZ - 110), new THREE.Vector3(24, 170, L.centerZ + 18)),
       frontBox: new THREE.Box3(new THREE.Vector3(-8, -5, 2), new THREE.Vector3(8, 6, 14)),
       frontCount: 14,
       size: 0.05,
@@ -466,12 +659,12 @@ export class MuseumScene {
       grain: 0.075,
       volumetric: {
         light: this.key,
-        density: 0.0011,
-        ambientDensity: 0.0004,
-        noiseScale: 0.028,
-        noiseAmount: 0.85,
+        density: 0.00042,
+        ambientDensity: 0.00025,
+        noiseScale: 0.022,
+        noiseAmount: 0.95,
         g: 0.5,
-        range: 260,
+        range: 300,
         intensity: 1,
         lightScale: 1,
       },
@@ -487,6 +680,7 @@ export class MuseumScene {
     this.displayScale = s;
     for (const [light, base] of this.scaledLights ?? []) light.intensity = base * s * s;
     this.floorShadowDirty = true;
+    this.exhibitShadowsDirty = true;
   }
 
   setQuality(q) {
@@ -519,14 +713,25 @@ export class MuseumScene {
     this.crystal.getWorldPosition(cu.coreCenter.value);
     cu.coreRadius.value = 0.42 * (this.displayScale ?? 1) * (1 + breath * 0.15);
     const s2 = (this.displayScale ?? 1) ** 2;
-    this.inner.intensity = (0.3 + 0.12 * breath) * CANDELA * 0.01 * s2;
     this.causticLight.intensity = (55 + 15 * breath) * CANDELA * 0.01 * s2;
     this.causticAngle = -T * 0.32 + this.sculpture.rotation.y;
     this.breath = breath;
   }
 
+  /** ORBIT: točka interesa je središte skulpture (statično, bez lebdenja). */
+  orbitTarget(out) {
+    return this.display.localToWorld(out.copy(this.sphereCenter));
+  }
+
+  /** ORBIT: kamera ostaje iznad poda, ispod stropa i unutar zidova galerije. */
+  orbitLimits() {
+    const s = this.displayScale ?? 1;
+    const y0 = this.display.getWorldPosition(_v).y;
+    return { minY: y0 + (L.floorY + 25) * s, maxY: y0 + (L.room.ceiling - 25) * s, maxRadius: (L.room.x - 45) * s };
+  }
+
   /** Pripreme prije glavnog rendera (jednom po frameu). */
-  beforeRender(renderer, scene, eyeWorld, rectWorld) {
+  beforeRender(renderer, scene, eyeWorld, rectWorld, camera, mode) {
     this.caustics.render(renderer, this.time, this.causticAngle ?? 0, this.breath ?? 0);
     if (this.frame % 3 === 0) this.deckShadow.update(renderer, scene);
     if (this.floorShadowDirty) {
@@ -534,9 +739,14 @@ export class MuseumScene {
       this.floorShadowDirty = false;
     }
     this.dust.update(this.time, this.key, 0.05);
+    if (this.exhibitShadowsDirty !== false) {
+      for (const cs of this.exhibitShadows) cs.update(renderer, scene);
+      this.exhibitShadowsDirty = false;
+    }
     if (this.reflection.enabled) {
       this.reflection.planeY = this.floor.getWorldPosition(_v).y;
-      this.reflection.update(renderer, scene, eyeWorld, rectWorld);
+      if (mode === 'orbit') this.reflection.updateFromCamera(renderer, scene, camera);
+      else this.reflection.update(renderer, scene, eyeWorld, rectWorld);
     }
   }
 }

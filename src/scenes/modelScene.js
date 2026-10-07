@@ -170,12 +170,30 @@ export class ModelScene {
     return box;
   }
 
+  /** ORBIT: točka interesa = središte modela (world). */
+  orbitTarget(out) {
+    if (this.content) {
+      _box.setFromObject(this.content);
+      if (!_box.isEmpty()) return _box.getCenter(out);
+    }
+    return this.pivot.getWorldPosition(out).add(_up.set(0, this.fit.height * 0.5, 0));
+  }
+
+  /** ORBIT: kamera ostaje iznad poda. */
+  orbitLimits() {
+    return { minY: this.floor.getWorldPosition(_v).y + 4 };
+  }
+
   update(t, dt) {
     if (!this.content) return;
     if (this.turntable) this.spin += dt * 0.35;
     this.content.rotation.y = this.spin;
   }
 }
+
+const _box = new THREE.Box3();
+const _v = new THREE.Vector3();
+const _up = new THREE.Vector3();
 
 /**
  * Omotaj objekt: outer (vrtnja) → wrapper (skala/centriranje) → flipper (naopako) → inner (original).

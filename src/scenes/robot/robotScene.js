@@ -7,7 +7,7 @@ import { generateSDF } from '../../geometry/generate.js';
 import { EYE_X, EYE_Z, SOCKET_R } from '../../geometry/robotModels.js';
 import { loadStudioHDR, buildStudioEnvironment } from '../../render/environment.js';
 import { configurePCSSSpot } from '../../render/pcss.js';
-import { chromeMaterial } from '../../render/materials.js';
+import { chromeMaterial, extendMaterial } from '../../render/materials.js';
 import { createRingTextTexture, loadFonts } from '../../render/proceduralTextures.js';
 import { EyeUnit } from './eye.js';
 import { GazeController } from './gaze.js';
@@ -31,6 +31,8 @@ const EYE_COLORS = {
 // Položaj robota: središte između očiju (cm, prostor prozora) i mjerilo.
 const ROBOT = { y: 3.6, z: -64, scale: 0.86 };
 const HEAD_PIVOT = new THREE.Vector3(0, -10.4, -6.3);
+// Studio (prostor prozora, cm): pod, polumjer cikloramskog zida, vrh zida.
+const STUDIO = { floorY: -140, radius: 255, top: 230 };
 const NECK_BASE = new THREE.Vector3(0, -21.2, -6.7);
 
 // Panel linije (GLSL, object prostor glave = prostor očiju, cm).
@@ -385,50 +387,152 @@ export class RobotScene {
   }
 
   #buildStudio() {
-    // Tamna pozadina studija (bešavni papir), daleko iza robota.
-    const backdrop = new THREE.Mesh(
-      new THREE.PlaneGeometry(600, 360),
-      new THREE.MeshStandardMaterial({ color: '#16171a', roughness: 0.95, metalness: 0, envMapIntensity: 0.4 }),
+    // Studio: ciklorama (bešavni zid koji se savija u pod) oko robota, tako da je
+    // i u ORBIT načinu, s boka i iza, pozadina uvijek studijska, a ne praznina.
+    const S = STUDIO;
+    const paper = extendMaterial(
+      new THREE.MeshStandardMaterial({ color: '#17181b', roughness: 0.94, metalness: 0, envMapIntensity: 0.4, side: THREE.DoubleSide }),
+      {
+        key: 'cycPaper',
+        uniforms: { cycFloor: { value: S.floorY }, cycTop: { value: S.top } },
+        fragmentPars: 'uniform float cycFloor; uniform float cycTop;',
+        hooks: {
+          // "Pečena" cyc rasvjeta: meki krug iza robota, gradijent s dna zida
+          // (kao reflektori u podnom kanalu) i blaga varijacija papira.
+          emissivemap_fragment: `
+            {
+              vec3 q = vObjPos;
+              float ang = atan( q.x, -q.z );
+              float h = clamp( ( q.y - cycFloor ) / ( cycTop - cycFloor ), 0.0, 1.0 );
+              float pool = exp( -ang * ang / 0.45 ) * exp( -pow( ( h - 0.3 ) / 0.26, 2.0 ) );
+              float sidePools = exp( -pow( abs( ang ) - 1.75, 2.0 ) / 0.18 ) * exp( -pow( ( h - 0.22 ) / 0.22, 2.0 ) );
+              float ground = exp( -h * 7.0 ) * ( 0.5 + 0.5 * cos( ang * 0.5 ) );
+              float base = 0.18 + 0.45 * pow( 1.0 - h, 2.0 );
+              float n = 0.9 + 0.2 * vnoise( vWorldPos * 0.02 );
+              totalEmissiveRadiance += vec3( 0.0062, 0.0074, 0.0098 ) * ( base + pool * 4.0 + sidePools * 1.6 + ground * 2.0 ) * n;
+            }
+          `,
+        },
+      },
     );
-    backdrop.position.set(0, 0, -190);
-    this.display.add(backdrop);
-    this.backdrop = backdrop;
+    const cove = 46;
+    const prof = [];
+    for (let i = 0; i <= 16; i++) {
+      const a = (i / 16) * (Math.PI / 2);
+      prof.push(new THREE.Vector2(S.radius - cove + Math.sin(a) * cove, S.floorY + cove - Math.cos(a) * cove));
+    }
+    prof.push(new THREE.Vector2(S.radius, S.top));
+    const cyc = new THREE.Mesh(new THREE.LatheGeometry(prof, 120, Math.PI / 6, (Math.PI * 5) / 3), paper);
+    cyc.position.set(0, 0, ROBOT.z);
+    cyc.receiveShadow = true;
+    this.display.add(cyc);
+    this.cyc = cyc;
+    const floor = new THREE.Mesh(
+      new THREE.CircleGeometry(S.radius + 40, 96).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: '#121315', roughness: 0.62, metalness: 0, envMapIntensity: 0.5 }),
+    );
+    floor.position.set(0, S.floorY, ROBOT.z);
+    floor.receiveShadow = true;
+    this.display.add(floor);
+    this.floor = floor;
+    this.backdrop = cyc;
+  }
+
+  /** Vidljiva studijska rasvjeta: softbox / strip box na stalku, usmjeren prema robotu. */
+  #addSoftbox(light, w, h, depth, glow) {
+    const S = STUDIO;
+    const housingMat = new THREE.MeshStandardMaterial({ color: '#0b0b0c', roughness: 0.75, metalness: 0.1 });
+    const poleMat = new THREE.MeshStandardMaterial({ color: '#141416', roughness: 0.35, metalness: 0.8 });
+    const box = new THREE.Group();
+    const housing = new THREE.Mesh(new THREE.BoxGeometry(w + 3, h + 3, depth), housingMat);
+    housing.position.z = -depth / 2 - 0.3;
+    const diffuser = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, h),
+      new THREE.ShaderMaterial({
+        uniforms: { color: { value: new THREE.Color(glow) } },
+        vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+        // Svjetliji centar, mekši rubovi — kao pravi difuzor.
+        fragmentShader: `uniform vec3 color; varying vec2 vUv;
+          void main(){ vec2 q = abs(vUv - 0.5) * 2.0; float e = (1.0 - smoothstep(0.75, 1.0, q.x)) * (1.0 - smoothstep(0.82, 1.0, q.y));
+            gl_FragColor = vec4(color * (0.55 + 0.45 * e), 1.0); }`,
+      }),
+    );
+    box.add(housing, diffuser);
+    box.position.copy(light.position);
+    box.lookAt(light.target.position);
+    this.display.add(box);
+    // Stalak: stup do poda + tri noge.
+    const p = light.position;
+    const poleLen = p.y - S.floorY;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.1, poleLen, 12), poleMat);
+    pole.position.set(p.x, S.floorY + poleLen / 2, p.z - 4);
+    this.display.add(pole);
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + 0.4;
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.7, 62, 8), poleMat);
+      const foot = new THREE.Vector3(p.x + Math.cos(a) * 42, S.floorY, p.z - 4 + Math.sin(a) * 42);
+      const hip = new THREE.Vector3(p.x, S.floorY + 34, p.z - 4);
+      leg.position.copy(foot).add(hip).multiplyScalar(0.5);
+      leg.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), hip.clone().sub(foot).normalize());
+      leg.scale.y = foot.distanceTo(hip) / 62;
+      this.display.add(leg);
+    }
   }
 
   #buildLights() {
     const head = new THREE.Vector3(0, ROBOT.y, ROBOT.z);
     this.headWorld = head;
-    // Key: lijevo-gore-sprijeda, meke PCSS sjene.
-    this.key = new THREE.SpotLight('#fff3e6', 6.5 * CANDELA, 0, THREE.MathUtils.degToRad(24), 0.85, 2);
-    this.key.position.set(-58, 34, -36);
-    this.key.target.position.copy(head).add(new THREE.Vector3(0, -6, 0));
-    configurePCSSSpot(this.key, 9, 2048);
+    // Sva studijska svjetla stoje ~2,35 m od glave — izvan putanje ORBIT kamere
+    // (koja ide najviše do ~2 m), pa ih kamera nikad ne zakloni niti udari u njih.
+    const D = 235;
+    const at = (azDeg, elDeg, dist = D) => {
+      const az = THREE.MathUtils.degToRad(azDeg);
+      const el = THREE.MathUtils.degToRad(elDeg);
+      return new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).multiplyScalar(dist).add(head);
+    };
+    const aim = head.clone().add(new THREE.Vector3(0, -6, 0));
+    // Key: sprijeda-lijevo-gore, veliki softbox → meke PCSS sjene.
+    this.key = new THREE.SpotLight('#fff3e6', 71 * CANDELA, 0, THREE.MathUtils.degToRad(12), 0.85, 2);
+    this.key.position.copy(at(-60, 24));
+    this.key.target.position.copy(aim);
+    configurePCSSSpot(this.key, 29, 2048);
     this.display.add(this.key, this.key.target);
-    // Fill: hladni, desno, slab.
-    this.fill = new THREE.SpotLight('#cfe0ff', 0.45 * CANDELA, 0, THREE.MathUtils.degToRad(40), 1, 2);
-    this.fill.position.set(48, 4, -14);
-    this.fill.target.position.copy(head).add(new THREE.Vector3(0, -6, 0));
+    // Fill: hladni, desno, nisko i slabo.
+    this.fill = new THREE.SpotLight('#cfe0ff', 5.2 * CANDELA, 0, THREE.MathUtils.degToRad(16), 1, 2);
+    this.fill.position.copy(at(65, 2));
+    this.fill.target.position.copy(aim);
     this.display.add(this.fill, this.fill.target);
-    // Rim lijevo-iza (s haze snopom i sjenom) i desno-iza.
-    this.rimL = new THREE.SpotLight('#dfe8ff', 15 * CANDELA, 0, THREE.MathUtils.degToRad(13), 0.5, 2);
-    this.rimL.position.set(-30, 34, -132);
+    // Rim svjetla straga-lijevo (s haze snopom) i straga-desno: silueta i na profilu.
+    this.rimL = new THREE.SpotLight('#dfe8ff', 129 * CANDELA, 0, THREE.MathUtils.degToRad(8), 0.5, 2);
+    this.rimL.position.copy(at(-140, 30));
     this.rimL.target.position.copy(head).add(new THREE.Vector3(2, -6, 4));
-    configurePCSSSpot(this.rimL, 6, 1024);
+    configurePCSSSpot(this.rimL, 12, 1024);
     this.rimL.shadow.radius = 0; // samo za volumetriju i grube obrise — bez PCSS cijene
     this.display.add(this.rimL, this.rimL.target);
-    this.rimR = new THREE.SpotLight('#fff0e0', 10 * CANDELA, 0, THREE.MathUtils.degToRad(20), 0.6, 2);
-    this.rimR.position.set(34, 16, -130);
+    this.rimR = new THREE.SpotLight('#fff0e0', 98 * CANDELA, 0, THREE.MathUtils.degToRad(9), 0.6, 2);
+    this.rimR.position.copy(at(135, 16));
     this.rimR.target.position.copy(head).add(new THREE.Vector3(-2, -6, 4));
     this.display.add(this.rimR, this.rimR.target);
     // Svjetlo na pozadini (meki krug iza glave — odvaja siluetu).
-    this.bgLight = new THREE.SpotLight('#9fb4d6', 5 * CANDELA, 0, THREE.MathUtils.degToRad(30), 1, 2);
-    this.bgLight.position.set(0, 40, -100);
-    this.bgLight.target.position.set(0, -4, -190);
+    this.bgLight = new THREE.SpotLight('#9fb4d6', 12 * CANDELA, 0, THREE.MathUtils.degToRad(26), 1, 2);
+    this.bgLight.position.set(0, 60, -120);
+    this.bgLight.target.position.set(0, -10, ROBOT.z - STUDIO.radius);
     this.display.add(this.bgLight, this.bgLight.target);
+    // Slabo gornje svjetlo: pod i "top light" na lubanji.
+    this.topWash = new THREE.SpotLight('#cdd6e4', 4 * CANDELA, 0, THREE.MathUtils.degToRad(60), 1, 2);
+    this.topWash.position.set(0, 225, ROBOT.z);
+    this.topWash.target.position.set(0, STUDIO.floorY, ROBOT.z);
+    this.display.add(this.topWash, this.topWash.target);
 
     this.hemi = new THREE.HemisphereLight('#20242b', '#08080a', 0.08);
     this.display.add(this.hemi);
-    this.scaledLights = [this.key, this.fill, this.rimL, this.rimR, this.bgLight].map((l) => [l, l.intensity]);
+    this.scaledLights = [this.key, this.fill, this.rimL, this.rimR, this.bgLight, this.topWash].map((l) => [l, l.intensity]);
+
+    // Vidljiva oprema studija na mjestima stvarnih svjetala (vidi se s boka i iza).
+    this.#addSoftbox(this.key, 80, 100, 26, new THREE.Color('#fff3e6').multiplyScalar(1.5));
+    this.#addSoftbox(this.rimL, 26, 120, 18, new THREE.Color('#e4ecff').multiplyScalar(1.7));
+    this.#addSoftbox(this.rimR, 26, 120, 18, new THREE.Color('#fff2e6').multiplyScalar(1.5));
+    this.#addSoftbox(this.fill, 60, 80, 22, new THREE.Color('#d8e4ff').multiplyScalar(0.35));
   }
 
   activate(scene, ctx) {
@@ -508,13 +612,23 @@ export class RobotScene {
     const T = this.time;
 
     // Gledatelj u prostoru poprsja.
+    this.group.parent?.updateMatrixWorld();
     this.root.updateMatrixWorld();
     const viewerWorld = new THREE.Vector3(...ctx.eye);
-    this.group.parent?.updateMatrixWorld();
     const viewerLocal = this.root.worldToLocal(viewerWorld.clone());
     const yaw = Math.atan2(viewerLocal.x, viewerLocal.z);
     const pitch = Math.atan2(viewerLocal.y, Math.hypot(viewerLocal.x, viewerLocal.z));
-    const g = this.gaze.update(dt, ctx.eye[2], new THREE.Vector2(yaw, pitch));
+    // Ponašanje pogleda (G): 1 = oči prate do ±25° od fronte, zatim gledaju naprijed;
+    // 2 = oči uvijek prate (do granice rotacije oka); 3 = glava i oči prate.
+    const gazeMode = ctx.gazeMode ?? 3;
+    const followHead = gazeMode === 3;
+    // Ekvivalent udaljenosti gledatelja od ekrana (za blendu), neovisno o načinu kamere.
+    const headWorld = this.root.localToWorld(new THREE.Vector3(0, 0, 0));
+    const viewerZ = viewerWorld.distanceTo(headWorld) - Math.abs(ROBOT.z) * (this.displayScale ?? 1);
+    const g = this.gaze.update(dt, viewerZ, followHead ? new THREE.Vector2(yaw, pitch) : new THREE.Vector2(0, 0));
+    const frontAngle = Math.atan2(Math.hypot(viewerLocal.x, viewerLocal.y), viewerLocal.z);
+    const followGoal = gazeMode === 1 ? 1 - THREE.MathUtils.smoothstep(frontAngle, THREE.MathUtils.degToRad(22), THREE.MathUtils.degToRad(31)) : 1;
+    this.eyeFollow = THREE.MathUtils.lerp(this.eyeFollow ?? 1, followGoal, 1 - Math.exp(-dt * 5));
 
     // Disanje + glava/vrat s inercijom.
     const breath = Math.sin(T * (Math.PI * 2 / 4.6));
@@ -524,15 +638,22 @@ export class RobotScene {
     this.neckJoint.rotation.set(-g.neck.y, g.neck.x, 0, 'YXZ');
     this.headJoint.rotation.set(-(g.head.y - g.neck.y) + breath * 0.004, g.head.x - g.neck.x, Math.sin(T * 0.21) * 0.01, 'YXZ');
 
-    // Oči: točno prema gledatelju (+ sakade u ravnini njegova lica).
-    const target = viewerWorld.clone().add(new THREE.Vector3(g.offset.x, g.offset.y, 0));
+    // Oči: točno prema gledatelju (+ sakade u ravnini okomitoj na smjer pogleda).
     this.root.updateMatrixWorld(true);
+    const toV = viewerWorld.clone().sub(headWorld).normalize();
+    const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), toV).normalize();
+    const up = new THREE.Vector3().crossVectors(toV, right);
+    const target = viewerWorld
+      .clone()
+      .addScaledVector(right, g.offset.x * this.eyeFollow)
+      .addScaledVector(up, g.offset.y * this.eyeFollow);
     this.eyeColor.lerp(this.targetEyeColor, 1 - Math.exp(-dt * 6));
     const pulse = 0.5 * Math.sin(T * 2.6) + 0.18 * Math.sin(T * 7.3 + 1.2);
     for (const eye of this.eyes) {
       const local = eye.root.worldToLocal(target.clone());
-      const ey = Math.atan2(local.x, local.z);
-      const ep = Math.atan2(local.y, Math.hypot(local.x, local.z));
+      // Izvan dosega (mod 1) oči se glatko vrate i gledaju ravno naprijed.
+      const ey = Math.atan2(local.x, local.z) * this.eyeFollow;
+      const ep = Math.atan2(local.y, Math.hypot(local.x, local.z)) * this.eyeFollow;
       eye.gimbal.rotation.set(
         -THREE.MathUtils.clamp(ep, -0.5, 0.5),
         THREE.MathUtils.clamp(ey, -0.62, 0.62),
@@ -547,6 +668,17 @@ export class RobotScene {
     for (const [led, k] of this.leds) led.material.color.copy(this.eyeColor).multiplyScalar(k * (0.75 + 0.25 * Math.sin(T * 1.7)));
     for (const [i, r] of this.earRotors.entries()) r.rotation.y = T * (i ? -0.35 : 0.35);
     this.neck.update();
+  }
+
+  /** ORBIT: točka interesa je središte glave (statično — robot stoji mirno). */
+  orbitTarget(out) {
+    return this.root.localToWorld(out.set(0, 0.8, -5.5));
+  }
+
+  orbitLimits() {
+    const s = this.displayScale ?? 1;
+    const y0 = this.display.getWorldPosition(_v).y;
+    return { minY: y0 + (STUDIO.floorY + 25) * s, maxY: y0 + (STUDIO.top - 25) * s, maxRadius: (STUDIO.radius - 50) * s };
   }
 
   beforeRender() {
@@ -669,3 +801,5 @@ export class RobotScene {
     this.custom.group.position.y -= dy;
   }
 }
+
+const _v = new THREE.Vector3();

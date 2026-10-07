@@ -27,7 +27,7 @@ export class DebugOverlay {
     }
   }
 
-  draw({ tracker, source, eye, rect, stereo, sceneName, quality }) {
+  draw({ tracker, source, eye, rect, stereo, sceneName, quality, orbitInfo }) {
     if (!this.visible) return;
     const { ctx, canvas } = this;
     const cw = canvas.width, ch = canvas.height;
@@ -73,6 +73,7 @@ export class DebugOverlay {
       `     y ${f(eye[1])} cm`,
       `     z ${f(eye[2])} cm`,
       `prozor ${rect.width.toFixed(1)}×${rect.height.toFixed(1)} cm`,
+      `kamera ${orbitInfo ?? 'WINDOW'}`,
       `scena  ${sceneName}${stereo ? ' · anaglif' : ''}${quality ? ` · ${quality}` : ''}`,
       `FPS    ${this.fps.toFixed(0)}` + (tracker?.ready ? `  · detekcija ${tracker.detectMs.toFixed(1)} ms` : ''),
     ].join('\n');

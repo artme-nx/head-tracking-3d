@@ -70,22 +70,64 @@ npm run preview   # lokalni pregled builda
 
 | Tipka | Akcija |
 | --- | --- |
+| `1` – `4` | scena: kutija / model / muzejska vitrina / robot |
+| `M` | način kamere: **ORBIT** ↔ **WINDOW** (scene 2–4; kratko se prikaže u kutu) |
+| `N` | ORBIT: "ovo je centar" — trenutni položaj glave postaje neutralni |
+| `T` | ORBIT panel: pojačanja, kutovi, zoom, mrtva zona, krutost opruge (spremaju se) |
+| `G` | pogled robota: oči prate do ±25° / oči uvijek prate / glava i oči prate |
+| `E` | boja očiju robota (cijan / jantar) |
+| `Q` | kvaliteta AAA scena: high / low |
 | `F` | cijeli zaslon (preporučeno) |
-| `D` | debug overlay — slika kamere s točkama očiju, x/y/z u cm, FPS |
+| `D` | debug overlay — slika kamere s točkama očiju, x/y/z u cm, FPS, azimut/elevacija/zoom |
 | `C` | kalibracijski panel |
 | `S` | crveno-cijan anaglif (stereo) |
-| `1` / `2` | preset scene: kutija / model na postolju |
-| `M` | miš glumi glavu (kotačić = udaljenost) |
+| `K` | miš glumi glavu (kotačić = naprijed/natrag) |
 | `H` | sakrij sučelje |
-| `T` | vrtnja modela |
+| `V` | vrtnja modela (scena 2) |
 | `R` | okreni model naopako (česta potreba kod splatova) |
 | `[` / `]` | smanji / povećaj model |
+| `↑` / `↓` | fino pomicanje očiju na vlastitoj glavi robota |
 
 **Vlastiti model:** povuci i ispusti `.glb` / `.gltf` (s pripadnim `.bin` i teksturama
 ako ih ima) ili Gaussian splat `.ply` / `.splat` / `.spz` / `.ksplat` bilo gdje u prozor.
 Model se automatski centrira i skalira da stane u scenu.
 
 Bez kamere (odbijena dozvola, nema uređaja) miš automatski glumi glavu.
+
+## ORBIT ili WINDOW — dva načina kamere
+
+**WINDOW** je fizički točna off-axis projekcija: ekran je prozor, a kamera je točno na tvom oku.
+Kao kroz pravi prozor, kad se odmakneš, objekt iza stakla na ekranu postaje *veći* (prozor zauzima manji
+kut, a objekt ostaje gdje jest), a pomak glave u stranu mijenja kut gledanja samo onoliko koliko bi ga
+mijenjao i u stvarnosti — uvjerljivo, ali suptilno. Zadan je za scene 1 i 2.
+
+**ORBIT** je zadan za Vitrinu i Robota: perspektivna kamera uvijek gleda u točku interesa (središte
+skulpture / središte glave robota), objekt stoji mirno, a ti kružiš oko njega.
+
+- **Neutralni položaj** se automatski kalibrira u prve ~1,5 s nakon što se lice pronađe (i nakon duljeg
+  gubitka lica); `N` ga ručno postavlja na trenutni položaj glave.
+- **Vodoravni pomak glave → azimut** s pojačanjem: zadano ~20 cm = ~75° orbite, najviše ±90°. Pomakneš
+  glavu udesno → kamera ide udesno oko objekta, kao da hodaš oko njega, sve do profila.
+- **Okomiti pomak → elevacija** (manje pojačanje, najviše ±30°).
+- **Udaljenost glave → dolly**: nagneš se naprijed = kamera bliže i objekt raste; odmakneš se = dalje.
+  Koristi se *relativna* promjena prema neutralnom položaju (raspon ~0,6× – 1,6×), pa je stabilno.
+- **Krivulja odziva:** mala mrtva zona u centru, mekani prijelaz, zatim glatka krivulja s mekim limitom
+  (tanh) na rubovima umjesto naglog zaustavljanja.
+- **Kretanje** ide kroz kritično prigušenu oprugu: ima težinu i inerciju, bez podrhtavanja i bez osjetnog
+  kašnjenja. Kamera ne može u pod, strop ni kroz zidove galerije/studija.
+- Pri neutralnom položaju ORBIT kadar je isti kao WINDOW, pa je prebacivanje `M` bez skoka.
+- Panel `T` podešava sve uživo (pojačanje azimuta, maks. kut, pojačanje i maks. elevacije, raspon i
+  osjetljivost zooma, mrtvu zonu, krutost opruge); vrijednosti se pamte u pregledniku.
+- `D` debug overlay prikazuje azimut, elevaciju i zoom.
+
+**Robot u ORBIT načinu** stoji mirno (glava i tijelo se ne okreću), pa mu možeš vidjeti profil. Zadano ga
+oči prate samo dok si unutar ~±25° od fronte, a dalje se glatko vrate i gledaju naprijed. `G` prebacuje:
+(1) to zadano ponašanje, (2) oči uvijek prate do granice rotacije oka, (3) glava i oči prate kao u
+WINDOW načinu.
+
+Galerija i studio prošireni su da i bok izgleda kao front: u galeriji su naslov izložbe na zidu, prolaz u
+susjednu dvoranu, dva sporedna izloška pod vlastitim reflektorima i stropne tračnice; robot stoji u
+studiju s cikloramom, a softboxovi na stalcima su na mjestima stvarnih svjetala (izvan putanje kamere).
 
 ## Kalibracija
 
@@ -145,8 +187,10 @@ iz `window.screenX/Y`, pa je "prozor u svijet" upravo onaj dio ekrana koji prozo
   ekrana, kamera iznad gornjeg ruba). Signal se zaglađuje **One Euro** filterom.
   Kad se lice izgubi, pogled se glatko vraća u centar.
 - **Projekcija** (`src/projection/`): Kooima *generalized perspective projection* — kamera stoji
-  na položaju oka, a asimetrični frustum prolazi točno kroz rubove fizičkog ekrana.
+  na položaju oka, a asimetrični frustum prolazi točno kroz rubove fizičkog ekrana (WINDOW način).
   Ravnina ekrana je `z = 0`; objekti iza ekrana imaju negativan z, ispred pozitivan.
+- **Orbit** (`src/camera/orbitController.js`): kalibracija neutralnog položaja, krivulja odziva, kritično
+  prigušena opruga, ograničenja prostora i stereo s nultom paralaksom na objektu (ORBIT način).
 - **Stereo** (`src/render/anaglyph.js`): scena se crta dvaput, iz stvarnog položaja lijevog i
   desnog oka (uzimajući u obzir nagib glave), i spaja u crveno (lijevo) / cijan (desno).
 - **Scene** (`src/scenes/`): kutija s mrežom dubine 50 cm i metama, studijski preset s modelom na
@@ -160,7 +204,8 @@ iz `window.screenX/Y`, pa je "prozor u svijet" upravo onaj dio ekrana koji prozo
 
 Za automatske testove (Playwright) stranica izlaže `window.__ht`: `setHead([x, y, z])` (položaj glave u cm
 od centra prozora, `null` vraća praćenje), `setPreset(i)`, `setQuality('high'|'low')`, `setStereo(bool)`,
-`benchmark(n)` (ms po frameu bez vsynca) i `state()`.
+`setCameraMode('orbit'|'window')`, `setOrbit({ az, el, zoom })` (orbita bez glave; `null` vraća upravljanje),
+`setGazeMode(1|2|3)`, `benchmark(n)` (ms po frameu bez vsynca) i `state()`.
 
 ## Zasluge
 
