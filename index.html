@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="hr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Ekran kao prozor</title>
+    <meta name="description" content="Head-coupled perspective demo: off-axis projekcija s praćenjem glave preko web kamere." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='6' width='24' height='18' rx='2' fill='none' stroke='%23d8dde6' stroke-width='2'/%3E%3Ccircle cx='16' cy='15' r='3' fill='%2368c3ff'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <div id="hud" class="hud">
+      <div class="hud__status"><span class="dot" id="status-dot"></span><span id="status-text">Pokrećem kameru…</span></div>
+      <div class="hud__keys">
+        <kbd>F</kbd> cijeli zaslon <kbd>D</kbd> debug <kbd>C</kbd> kalibracija <kbd>S</kbd> stereo
+        <kbd>1</kbd><kbd>2</kbd> scena <kbd>M</kbd> miš <kbd>H</kbd> sakrij
+      </div>
+      <div class="hud__hint">Ispusti .glb / .gltf ili Gaussian splat (.ply / .splat / .spz) bilo gdje u prozor</div>
+    </div>
+
+    <div id="debug" class="debug" hidden>
+      <canvas id="debug-cam" width="240" height="180"></canvas>
+      <pre id="debug-text"></pre>
+    </div>
+
+    <form id="calib" class="panel" hidden autocomplete="off"></form>
+
+    <div id="drop" class="drop" hidden><div>Ispusti model</div></div>
+    <div id="toast" class="toast" hidden></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
