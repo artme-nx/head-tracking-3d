@@ -40,6 +40,8 @@ const PCSS_GLSL = /* glsl */ `
 
 	float getSpotShadow( sampler2D shadowMap, vec2 shadowMapSize, float shadowIntensity, float shadowBias, float shadowRadius, vec4 shadowCoord ) {
 
+		// Isključena sjena (npr. svjetiljka na prstu dok ne gori): bez ikakvog uzorkovanja.
+		if ( shadowIntensity <= 0.0 ) return 1.0;
 		shadowCoord.xyz /= shadowCoord.w;
 		shadowCoord.z += shadowBias;
 
@@ -49,7 +51,18 @@ const PCSS_GLSL = /* glsl */ `
 		float zR = shadowCoord.z;
 		// radius = 0 → tvrda sjena s jednim uzorkom (npr. rim svjetla čija je sjena
 		// potrebna samo volumetriji, a na površinama se jedva vidi).
-		if ( shadowRadius <= 0.0 ) return mix( 1.0, step( zR, texture2D( shadowMap, shadowCoord.xy ).r ), shadowIntensity );
+		if ( shadowRadius == 0.0 ) return mix( 1.0, step( zR, texture2D( shadowMap, shadowCoord.xy ).r ), shadowIntensity );
+		// radius < 0 → meka sjena fiksne širine (|radius| teksela) za svjetla s vlastitim
+		// near/far (svjetiljka na prstu je preblizu za zajednički PCSS near).
+		if ( shadowRadius < 0.0 ) {
+			float r = -shadowRadius / shadowMapSize.x;
+			float ph = pcssNoise( gl_FragCoord.xy ) * 6.28318530718;
+			float lit = 0.0;
+			for ( int i = 0; i < PCSS_FILTER_SAMPLES; i ++ ) {
+				lit += step( zR, texture2D( shadowMap, shadowCoord.xy + pcssVogel( i, PCSS_FILTER_SAMPLES, ph ) * r ).r );
+			}
+			return mix( 1.0, lit / float( PCSS_FILTER_SAMPLES ), shadowIntensity );
+		}
 		float zRLin = pcssLinearDepth( zR );
 		float lightUV = shadowRadius;
 		float phi = pcssNoise( gl_FragCoord.xy ) * 6.28318530718;

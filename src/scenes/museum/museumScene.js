@@ -11,9 +11,11 @@ import { ContactShadows, CONTACT_LAYER } from '../../render/contactShadows.js';
 import { PlanarReflection } from '../../render/planarReflection.js';
 import { CausticsTexture } from '../../render/caustics.js';
 import { DustMotes } from '../../render/dust.js';
+import { MuseumHands } from './handInteraction.js';
 import {
   chromeMaterial,
   crystalMaterial,
+  createGlassWaves,
   glassPaneMaterial,
   glassEdgeMaterial,
   brushedMetalMaterial,
@@ -132,6 +134,11 @@ export class MuseumScene {
     this.#buildSculpture(geo, brush);
     this.#buildLights();
     this.#buildEffects();
+    this.hands = new MuseumHands(this, { L, CANDELA });
+    this.onLatticeClose = () => {
+      // Polovice rešetke sjele: jedva primjetan trzaj skulpture.
+      this.hands.wobbleV.x += 0.02;
+    };
     if (this.size) this.reflection.setSize(...this.size);
   }
 
@@ -379,8 +386,10 @@ export class MuseumScene {
     const cz = L.centerZ;
     this.glassTop = y0 + g.h;
 
-    const glass = glassPaneMaterial(smudge, 1);
-    const glass2 = glassPaneMaterial(smudge, 1.3);
+    // Valovi udarca dijele se između svih stakala (val prelazi i preko rubova).
+    this.glassWaves = createGlassWaves();
+    const glass = glassPaneMaterial(smudge, 1, 0.3, this.glassWaves);
+    const glass2 = glassPaneMaterial(smudge, 1.3, 0.3, this.glassWaves);
     const edge = glassEdgeMaterial();
     for (const m of [glass, glass2, edge]) m.envMapIntensity = m === edge ? 1.5 : 1.6;
     this.glassPanes = [];
@@ -398,7 +407,7 @@ export class MuseumScene {
     pane(g.w, g.h, t, [edge, edge, edge, edge, glass2, glass2], 0, cy, cz - g.d / 2 + t / 2);
     pane(t, g.h, g.d - 2 * t, [glass2, glass2, edge, edge, edge, edge], -g.w / 2 + t / 2, cy, cz);
     pane(t, g.h, g.d - 2 * t, [glass, glass, edge, edge, edge, edge], g.w / 2 - t / 2, cy, cz);
-    const glassTop = glassPaneMaterial(smudge, 0.6, 0.03);
+    const glassTop = glassPaneMaterial(smudge, 0.6, 0.03, this.glassWaves);
     glassTop.envMapIntensity = 0.5;
     pane(g.w, t, g.d, [edge, edge, glassTop, glassTop, edge, edge], 0, y0 + g.h + t / 2, cz);
 
@@ -509,6 +518,18 @@ export class MuseumScene {
     this.lattice.receiveShadow = false;
     this.lattice.layers.enable(CONTACT_LAYER);
     this.sculpture.add(this.lattice);
+    // Polovice rešetke (samo dok se jezgra izvlači): razmiču se duž lokalne osi x.
+    this.halves = [geo.halfL, geo.halfR].map((g) => {
+      const m = new THREE.Mesh(g, chrome);
+      m.castShadow = true;
+      m.receiveShadow = false;
+      m.visible = false;
+      m.layers.enable(CONTACT_LAYER);
+      this.sculpture.add(m);
+      return m;
+    });
+    this.spin = 0; // zakret skulpture (akumulira se; ruka ga može poravnati)
+    this.coreSpin = 0;
 
     // Kristalna jezgra: nepravilni fasetirani dragulj.
     const gem = new THREE.IcosahedronGeometry(2.35, 1);
@@ -548,6 +569,7 @@ export class MuseumScene {
     this.causticLight.map = this.caustics.texture;
     this.causticLight.position.copy(this.sphereCenter);
     this.causticLight.target.position.set(2.5, this.deckY, L.centerZ + 4);
+    this.causticBaseTarget = this.causticLight.target.position.clone();
     this.display.add(this.causticLight, this.causticLight.target);
 
     // Meko prednje svjetlo (pločica, prednji rub baze). Rim na kromu dolazi iz
@@ -591,6 +613,7 @@ export class MuseumScene {
 
     // Intenziteti točkastih/spot svjetala skaliraju se s s² kad se kompozicija skalira.
     this.scaledLights = [this.key, this.causticLight, this.wallWash, this.fill, this.kicker, this.titleWash, this.spotA, this.spotB, this.doorLight].filter(Boolean).map((l) => [l, l.intensity]);
+    this.keyBase = this.key.intensity; // osnovni intenzitet (update ga skalira i prigušuje)
   }
 
   /** Tijelo reflektora na stropnoj tračnici, usmjereno prema cilju svjetla. */
@@ -645,6 +668,7 @@ export class MuseumScene {
   activate(scene, ctx) {
     scene.background = BG;
     scene.fog = null;
+    this.post = ctx.post;
     // Scena (zidovi, kamen, staklo) živi u tamnoj galeriji; krom, kristal i
     // metali dobivaju studijske trake (kao kartice i zastavice u produktnoj fotografiji).
     scene.environment = this.glassEnv;
@@ -668,8 +692,12 @@ export class MuseumScene {
         intensity: 1,
         lightScale: 1,
       },
-      bloomSelection: [this.crystal],
+      bloomSelection: [this.crystal, ...(this.hands?.bloomObjects ?? [])],
     });
+  }
+
+  deactivate() {
+    if (this.post) this.post.ripple.enabled = false;
   }
 
   layout(rect) {
@@ -696,25 +724,54 @@ export class MuseumScene {
     this.reflection?.setSize(width, height);
   }
 
-  update(t, dt) {
+  update(t, dt, ctx = {}) {
     this.time += dt;
+    this.frameDt = dt;
     this.frame++;
     const T = this.time;
-    // Sfera se polako vrti, jezgra suprotno i "diše".
-    this.sculpture.rotation.y = T * 0.075;
-    this.sculpture.rotation.x = Math.sin(T * 0.05) * 0.08;
+    const H = this.hands;
+    // Ruke: svjetiljka, izvlačenje jezgre, kucanje po staklu.
+    H.update(dt, T, ctx.hand, ctx.eye ? _cam.fromArray(ctx.eye) : null);
+    const held = H.heldAmt;
+    // Sfera se polako vrti (dok traje izvlačenje, procjep se okrene prema gledatelju),
+    // jezgra suprotno i "diše"; udarac u staklo je malo zanjiše.
+    if (H.alignAngle === null) this.spin += dt * 0.075;
+    this.sculpture.rotation.y = this.spin;
+    this.sculpture.rotation.x = Math.sin(T * 0.05) * 0.08 + H.wobble.x;
+    this.sculpture.rotation.z = H.wobble.y;
     this.sculpture.position.y = this.sphereCenter.y + Math.sin(T * 0.6) * 0.12;
+    // Polovice rešetke: cijela rešetka dok su zatvorene, polovice čim se razmaknu.
+    const open = H.open;
+    const split = open > 0.004;
+    this.lattice.visible = !split;
+    this.halves[0].visible = this.halves[1].visible = split;
+    this.halves[0].position.x = -open;
+    this.halves[1].position.x = open;
+    // Jezgra: pomak u prostoru display → lokalni prostor skulpture.
+    this.sculpture.updateMatrix();
+    _q.copy(this.sculpture.quaternion).invert();
+    this.coreGroup.position.copy(H.core).applyQuaternion(_q);
     const breath = Math.sin(T * (Math.PI * 2 / 6.5));
-    this.coreGroup.rotation.y = -T * 0.32;
-    this.coreGroup.rotation.z = Math.sin(T * 0.21) * 0.25;
+    this.coreSpin += dt * THREE.MathUtils.lerp(0.32, 0.14, held);
+    this.coreGroup.rotation.y = -this.coreSpin;
+    this.coreGroup.rotation.z = Math.sin(T * 0.21) * 0.25 * (1 - held);
     this.coreGroup.scale.setScalar(1 + breath * 0.045);
     const cu = this.crystal.material.userData.crystal;
-    cu.coreColor.value.set('#fff2dc').multiplyScalar(6 + breath * 2.5);
+    // U ruci jezgra jače svijetli (i obasjava rešetku i staklo iznutra).
+    cu.coreColor.value.set('#fff2dc').multiplyScalar((6 + breath * 2.5) * (1 + 0.75 * held));
+    cu.coreMax.value = held > 0.01 ? THREE.MathUtils.lerp(40, 7, held) : 1e4;
     this.crystal.getWorldPosition(cu.coreCenter.value);
-    cu.coreRadius.value = 0.42 * (this.displayScale ?? 1) * (1 + breath * 0.15);
+    cu.coreRadius.value = 0.42 * (this.displayScale ?? 1) * (1 + breath * 0.15) * (1 + 0.25 * held);
     const s2 = (this.displayScale ?? 1) ** 2;
-    this.causticLight.intensity = (55 + 15 * breath) * CANDELA * 0.01 * s2;
-    this.causticAngle = -T * 0.32 + this.sculpture.rotation.y;
+    H.crystalLight.intensity = held * 0.2 * CANDELA * s2 * (1 + 0.15 * breath);
+    // Kaustike: projektor u kristalu, uperen na suprotnu stranu od svjetiljke.
+    const aim = H.causticAim(this.causticBaseTarget, _target);
+    this.causticLight.position.copy(aim.position);
+    this.causticLight.target.position.copy(_target);
+    this.causticLight.intensity = (55 + 15 * breath) * CANDELA * 0.01 * s2 * aim.factor;
+    // Glavni reflektor se lagano priguši dok svjetiljka gori.
+    this.key.intensity = this.keyBase * s2 * (1 - 0.45 * (H.amount ?? 0));
+    this.causticAngle = -this.coreSpin + this.sculpture.rotation.y;
     this.breath = breath;
   }
 
@@ -748,7 +805,7 @@ export class MuseumScene {
       this.floorShadow.update(renderer, scene);
       this.floorShadowDirty = false;
     }
-    this.dust.update(this.time, this.key, 0.05);
+    this.dust.update(this.time, this.key, 0.05, this.frameDt ?? 0.016);
     if (this.exhibitShadowsDirty !== false) {
       for (const cs of this.exhibitShadows) cs.update(renderer, scene);
       this.exhibitShadowsDirty = false;
@@ -762,3 +819,6 @@ export class MuseumScene {
 }
 
 const _v = new THREE.Vector3();
+const _cam = new THREE.Vector3();
+const _target = new THREE.Vector3();
+const _q = new THREE.Quaternion();

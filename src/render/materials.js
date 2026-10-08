@@ -132,6 +132,7 @@ export function crystalMaterial({ ior = 2.1, dispersion = 0.045, coreColor = '#f
     coreCenter: { value: new THREE.Vector3() },
     coreRadius: { value: 0.45 },
     tint: { value: new THREE.Color('#eaf6ff') },
+    coreMax: { value: 1e4 }, // gornja granica sjaja jezgre (smanji se kad je jezgra u ruci)
   };
   m.userData.crystal = uniforms;
   return extendMaterial(m, {
@@ -144,6 +145,7 @@ export function crystalMaterial({ ior = 2.1, dispersion = 0.045, coreColor = '#f
       uniform vec3 coreCenter;
       uniform float coreRadius;
       uniform vec3 tint;
+      uniform float coreMax;
     `,
     hooks: {
       envmap_physical_pars_fragment: /* glsl */ `
@@ -180,7 +182,7 @@ export function crystalMaterial({ ior = 2.1, dispersion = 0.045, coreColor = '#f
             crystalEnv( rB, 0.0 ).b
           );
           refr += crystalEnv( inner, 0.05 ) * 0.45;
-          vec3 glow = coreColor * vec3( coreGlow( vWorldPos, rR ), coreGlow( vWorldPos, rG ), coreGlow( vWorldPos, rB ) );
+          vec3 glow = min( coreColor * vec3( coreGlow( vWorldPos, rR ), coreGlow( vWorldPos, rG ), coreGlow( vWorldPos, rB ) ), vec3( coreMax ) );
           vec3 body = ( refr * tint + glow ) * ( 1.0 - F );
           gl_FragColor = vec4( outgoingLight + body, 1.0 );
         }
@@ -189,12 +191,22 @@ export function crystalMaterial({ ior = 2.1, dispersion = 0.045, coreColor = '#f
   });
 }
 
+/** Zajednički uniformi valova na staklu (do 3 istodobna udarca), dijele ih sva stakla vitrine. */
+export function createGlassWaves() {
+  return {
+    glassWaves: { value: [new THREE.Vector4(0, 0, 0, -1), new THREE.Vector4(0, 0, 0, -1), new THREE.Vector4(0, 0, 0, -1)] },
+    glassWaveAmp: { value: [0, 0, 0] },
+  };
+}
+
 /**
  * Tanko staklo vitrine: reflektira okolinu (Fresnel), propušta pozadinu, ima
  * mrlje (veća hrapavost) i prašinu (difuzno). Premultiplied blending:
  * boja = refleksija + prašina, alfa = apsorpcija.
+ * Udarac u staklo (waves): paket valova se širi od točke udarca i savija normalu
+ * (suptilna distorzija odsjaja), uz kratko titranje cijelog stakla.
  */
-export function glassPaneMaterial(smudgeTex, repeat = 1, dustAmount = 0.3) {
+export function glassPaneMaterial(smudgeTex, repeat = 1, dustAmount = 0.3, waves = createGlassWaves()) {
   const tex = smudgeTex.clone();
   tex.repeat.set(repeat, repeat);
   tex.needsUpdate = true;
@@ -215,8 +227,13 @@ export function glassPaneMaterial(smudgeTex, repeat = 1, dustAmount = 0.3) {
   });
   return extendMaterial(m, {
     key: 'glassPane',
-    uniforms: { dustAmount: { value: dustAmount } },
-    fragmentPars: 'uniform float dustAmount;',
+    uniforms: { dustAmount: { value: dustAmount }, ...waves },
+    fragmentPars: /* glsl */ `
+      uniform float dustAmount;
+      uniform vec4 glassWaves[ 3 ];
+      uniform float glassWaveAmp[ 3 ];
+      float glassSheen;
+    `,
     hooks: {
       // map: R kanal = prašina → difuzna boja; G = hrapavost; B = alfa.
       map_fragment: `
@@ -227,8 +244,30 @@ export function glassPaneMaterial(smudgeTex, repeat = 1, dustAmount = 0.3) {
       roughnessmap_fragment: `
         roughnessFactor = clamp( texelRoughness.g * 2.2, 0.025, 0.6 );
       `,
+      normal_fragment_maps: /* glsl */ `
+        {
+          // Valovi od udarca: fini radijalni paket valova (~30 cm/s) + kratko titranje stakla.
+          vec3 bend = vec3( 0.0 );
+          glassSheen = 0.0;
+          for ( int i = 0; i < 3; i ++ ) {
+            float t = glassWaves[ i ].w;
+            if ( t < 0.0 || t > 2.0 ) continue;
+            vec3 d = vWorldPos - glassWaves[ i ].xyz;
+            float r = length( d );
+            float x = r - 30.0 * t;
+            float env = exp( - x * x / 6.0 ) * exp( - t * 2.4 ) * glassWaveAmp[ i ] / ( 1.0 + r * 0.05 );
+            float wave = sin( x * 3.3 ) * env;
+            float shudder = sin( t * 110.0 ) * exp( - t * 10.0 ) * 0.35 * glassWaveAmp[ i ] * exp( - r / 22.0 );
+            bend += ( d / max( r, 1e-3 ) ) * ( wave + shudder );
+            glassSheen += abs( wave ) * 0.6 + abs( shudder ) * 0.2;
+          }
+          normal = normalize( normal + ( viewMatrix * vec4( bend, 0.0 ) ).xyz * 0.16 );
+        }
+      `,
       opaque_fragment: `
-        gl_FragColor = vec4( outgoingLight, clamp( glassAlpha * 1.4 + dust * dustAmount * 0.25, 0.015, 0.4 ) );
+        // Fronta vala lagano uhvati svjetlo (vidi se i na tamnom odsjaju).
+        outgoingLight += vec3( 0.55, 0.6, 0.66 ) * glassSheen * 0.016;
+        gl_FragColor = vec4( outgoingLight, clamp( glassAlpha * 1.4 + dust * dustAmount * 0.25 + glassSheen * 0.012, 0.015, 0.4 ) );
       `,
     },
   });

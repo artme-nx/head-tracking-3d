@@ -35,6 +35,15 @@ za AAA scene, meshoptimizer za generiranu geometriju.
   zrake svjetla kroz rešetku), lebdeće čestice prašine (neke ispred ravnine ekrana), **animirane kaustike**
   kristala projicirane na dno vitrine, PCSS sjene, kontaktne sjene, polirani kameni pod s planarnim
   refleksijama koje su geometrijski točne za položaj tvoje glave.
+- **Ruke — svjetiljka:** podignut kažiprst upali mali topli izvor na vrhu prsta (glavni spot se lagano priguši);
+  pomicanjem ruke odsjaji klize po kromu, meke sjene se miču po postolju, a kaustike kristala padaju na suprotnu
+  stranu. Spuštena ruka — glavno svjetlo se glatko vrati.
+- **Ruke — izvlačenje jezgre:** pinch blizu skulpture uhvati kristalnu jezgru; rešetka se razdvoji na dvije
+  polovice (procjep se okrene prema tebi) i povlačenjem prema sebi jezgra izlazi i lebdi za rukom, može i ispred
+  stakla (staklo pritom zatitra). Dok je u ruci, polako se okreće i jače svijetli; kad pustiš, elastično se vrati
+  u središte, a polovice se spoje.
+- **Ruke — kucanje po staklu:** brzi tap prema ekranu — val se širi od točke udarca preko stakla (titra slika
+  iza stakla i odsjaji), prašina u snopu se uskovitla pa polako smiri, skulptura se minimalno zanjiše.
 
 ### 4 — Robot
 - Glava od zasebnih keramičkih/karbonskih panela s **pravim procjepima** (SDF ljuske), kroz procjepe na

@@ -1,5 +1,7 @@
 // Lebdeće čestice prašine: svijetle samo kad su u snopu svjetla (provjera
 // konusa u vertex shaderu), lagano kruže, neke su ispred ravnine ekrana.
+// Udarac (swirl) ih uskovitla oko točke udarca pa se polako smire; točkasto
+// svjetlo (svjetiljka na prstu) obasja one u svojoj blizini.
 
 import * as THREE from 'three';
 
@@ -41,6 +43,11 @@ export class DustMotes {
       size: { value: size },
       ambient: { value: 0.015 },
       frontGlow: { value: 0.35 },
+      swirlCenter: { value: new THREE.Vector3() },
+      swirlTime: { value: -1 },
+      swirlAmp: { value: 0 },
+      pointPos: { value: new THREE.Vector3() },
+      pointColor: { value: new THREE.Color(0, 0, 0) },
     };
 
     const material = new THREE.ShaderMaterial({
@@ -57,6 +64,11 @@ export class DustMotes {
         uniform float size;
         uniform float ambient;
         uniform float frontGlow;
+        uniform vec3 swirlCenter;
+        uniform float swirlTime;
+        uniform float swirlAmp;
+        uniform vec3 pointPos;
+        uniform vec3 pointColor;
         varying vec3 vColor;
         varying float vSoft;
         void main() {
@@ -69,12 +81,25 @@ export class DustMotes {
             sin( time * 0.07 * sp + ph * 1.3 ) * 1.2 + sin( time * 0.023 + ph ) * 3.0,
             cos( time * 0.09 * sp + ph * 0.7 ) * 1.4
           );
+          // Vrtlog nakon udarca: zakret oko okomite osi kroz točku udarca, jači blizu
+          // nje; naraste brzo, a smiruje se polako (čestice se vrate na svoje putanje).
+          if ( swirlTime >= 0.0 ) {
+            vec3 r = p - swirlCenter;
+            float fall = exp( - dot( r, r ) / ( 40.0 * 40.0 ) );
+            float a = swirlAmp * fall * ( 1.0 - exp( - swirlTime * 5.0 ) ) * exp( - swirlTime / 2.8 );
+            float ang = a * ( 1.4 + rnd.z * 1.6 );
+            float c = cos( ang ), s = sin( ang );
+            r.xz = mat2( c, -s, s, c ) * r.xz;
+            p = swirlCenter + r + vec3( 0.0, a * 5.0 * ( rnd.x - 0.35 ), 0.0 );
+          }
           vec4 world = modelMatrix * vec4( p, 1.0 );
           vec3 L = world.xyz - lightPos;
           float dist = length( L );
           float cone = smoothstep( cosOuter, cosInner, dot( L / dist, lightDir ) );
           float twinkle = 0.6 + 0.4 * sin( time * ( 1.5 + rnd.z * 2.5 ) + ph * 3.0 );
           vec3 lit = lightColor * cone / max( dist * dist, 1.0 ) * twinkle;
+          vec3 Lp = world.xyz - pointPos;
+          lit += pointColor / max( dot( Lp, Lp ), 6.0 ) * twinkle;
           vColor = lit + vec3( ambient ) + vec3( 0.9, 0.85, 0.8 ) * frontGlow * rnd.w * twinkle * 0.08;
           vec4 mv = viewMatrix * world;
           gl_Position = projectionMatrix * mv;
@@ -108,8 +133,23 @@ export class DustMotes {
     };
   }
 
+  /** Udarac: vrtlog oko točke (lokalni prostor prašine). */
+  swirl(center, amp = 1) {
+    this.uniforms.swirlCenter.value.copy(center);
+    this.uniforms.swirlTime.value = 0;
+    this.uniforms.swirlAmp.value = amp;
+  }
+
+  /** Točkasto svjetlo koje obasjava prašinu (svjetiljka na prstu); intenzitet 0 = ugašeno. */
+  setPointLight(worldPos, color, intensity) {
+    this.uniforms.pointPos.value.copy(worldPos);
+    this.uniforms.pointColor.value.copy(color).multiplyScalar(intensity);
+  }
+
   /** @param {THREE.SpotLight} light */
-  update(time, light, scale = 1) {
+  update(time, light, scale = 1, dt = 0) {
+    const sw = this.uniforms.swirlTime;
+    if (sw.value >= 0) sw.value = sw.value > 12 ? -1 : sw.value + dt;
     const u = this.uniforms;
     u.time.value = time;
     light.updateMatrixWorld();

@@ -9,6 +9,8 @@ const { sqrt, abs, max, PI } = Math;
  * Kromirana sfera od giroidne (TPMS) rešetke, šuplja iznutra.
  * mode: 'sheet' = membrana (|g| < t), 'network' = jedna mreža šipki (g > t),
  *       'double' = dvije isprepletene mreže šipki (|g| > t).
+ * Uz cijelu rešetku nastaju i dvije polovice (rez ravninom x = 0): koriste se samo
+ * dok se kristalna jezgra izvlači (polovice se razmaknu), inače se crta cijela.
  */
 function gyroidSphereModel({
   radius = 7,
@@ -23,8 +25,9 @@ function gyroidSphereModel({
   const k = (2 * PI) / period;
   const gradNorm = k * 1.12;
   const pad = 0.4;
+  const half = 0.06; // pola širine reza između polovica
   return {
-    pieces: ['lattice'],
+    pieces: ['lattice', 'halfL', 'halfR'],
     bounds: [-radius - pad, -radius - pad, -radius - pad, radius + pad, radius + pad, radius + pad],
     step,
     block: 8,
@@ -39,8 +42,11 @@ function gyroidSphereModel({
       if (mode === 'network') lattice = (strut - g) / gradNorm;
       else if (mode === 'double') lattice = (strut - abs(g)) / gradNorm;
       else lattice = abs(g) / gradNorm - thickness * 0.5;
-      out[0] = smax(lattice, shell, rim);
-      out[1] = 0;
+      const full = smax(lattice, shell, rim);
+      out[0] = full;
+      out[1] = smax(full, x + half, 0.05);
+      out[2] = smax(full, -x + half, 0.05);
+      out[3] = 0;
       return shell > 0 ? shell : 0;
     },
   };

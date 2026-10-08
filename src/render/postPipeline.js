@@ -22,6 +22,7 @@ import {
 } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
 import { VolumetricSpotPass } from './volumetric.js';
+import { GlassRipplePass } from './ripple.js';
 
 class OutputPass extends Pass {
   constructor() {
@@ -111,6 +112,8 @@ export class PostPipeline {
     });
 
     this.volumetric = new VolumetricSpotPass();
+    // Titranje stakla (samo dok traje val nakon udarca; inače isključeno).
+    this.ripple = new GlassRipplePass();
 
     this.bloom = new SelectiveBloomEffect(scene, camera, {
       mipmapBlur: true,
@@ -135,6 +138,7 @@ export class PostPipeline {
     this.composer.addPass(this.renderPass);
     this.composer.addPass(this.n8ao);
     this.composer.addPass(this.volumetric);
+    this.composer.addPass(this.ripple);
     this.composer.addPass(this.gradePass);
     this.composer.addPass(this.finishPass);
     this.composer.addPass(this.output);
@@ -196,6 +200,7 @@ export class PostPipeline {
     this.composer.setMainCamera(camera);
     this.n8ao.camera = camera;
     this.volumetric.mainCamera = camera;
+    this.ripple.mainCamera = camera;
     // Na ekran ide izravno zadnji efekt (sRGB); u render target (anaglif) preko OutputPassa.
     const toScreen = target === null;
     this.finishPass.renderToScreen = toScreen;
