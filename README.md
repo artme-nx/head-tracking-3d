@@ -78,11 +78,12 @@ npm run preview   # lokalni pregled builda
 | `E` | boja očiju robota (cijan / jantar) |
 | `Q` | kvaliteta AAA scena: high / low |
 | `F` | cijeli zaslon (preporučeno) |
-| `D` | debug overlay — slika kamere s točkama očiju, x/y/z u cm, FPS, azimut/elevacija/zoom |
+| `D` | debug overlay — slika kamere s točkama očiju i kosturima ruku, prepoznata gesta, 3D položaj prsta, x/y/z glave u cm, FPS, azimut/elevacija/zoom, ritam detekcije |
 | `C` | kalibracijski panel |
 | `S` | crveno-cijan anaglif (stereo) |
 | `K` | miš glumi glavu (kotačić = naprijed/natrag) |
-| `H` | sakrij sučelje |
+| `H` | diskretan sjajni marker na vrhu prsta (ruke) |
+| `U` | sakrij sučelje |
 | `V` | vrtnja modela (scena 2) |
 | `R` | okreni model naopako (česta potreba kod splatova) |
 | `[` / `]` | smanji / povećaj model |
@@ -93,6 +94,10 @@ ako ih ima) ili Gaussian splat `.ply` / `.splat` / `.spz` / `.ksplat` bilo gdje 
 Model se automatski centrira i skalira da stane u scenu.
 
 Bez kamere (odbijena dozvola, nema uređaja) miš automatski glumi glavu.
+
+**Ruke bez kamere (miš glumi ruku):** `Shift` + miš = vrh ispruženog kažiprsta, `Shift` + klik (drži) =
+pinch, `Shift` + kotačić = dubina prsta, `O` (drži) = otvoren dlan (prsti se postupno šire), `Z` (drži) =
+šaka, `Space` = brzi tap prema ekranu, `B` (drži) + miš = okvir od dvije ruke.
 
 ## ORBIT ili WINDOW — dva načina kamere
 
@@ -202,12 +207,28 @@ iz `window.screenX/Y`, pa je "prozor u svijet" upravo onaj dio ekrana koji prozo
 - **Geometrija** (`src/geometry/`): SDF primitive, marching cubes s narrow-band blokovima, worker s
   meshoptimizer simplifikacijom; modeli giroida i robota.
 
+### Praćenje ruku
+
+- MediaPipe **HandLandmarker** (do 2 ruke) uz FaceLandmarker, ista web kamera. Lice i ruke rade u dva
+  **web workera** (`src/tracking/vision.js`, `visionWorker.js`), pa render nikad ne čeka detekciju. Novi frame
+  kamere šalje se tek kad je render predao svoj frame GPU-u, a dinamička rezolucija AAA scena gleda i ritam
+  detekcije: ako detekcija gladuje (GPU dijeli s renderom), render spusti rezoluciju umjesto da izgubi praćenje.
+- **Ruka u 3D** (`src/interaction/handInput.js`): položaj u kadru → NDC ekrana → zraka iz trenutne kamere (radi
+  i u ORBIT načinu). Dubina dolazi iz veličine dlana (pinhole; širina dlana ~8,5 cm, metrički "world" landmarki
+  pa okret ruke ne smeta), relativno na udaljenost glave: ruka u neutralnom položaju drži točku ispred objekta,
+  primicanje ekranu je gura prema objektu. **One Euro** filter + glatka interpolacija na 60 fps.
+- **Geste** (`src/tracking/gestures.js`) s histerezom, vremenom potvrde i cooldownom: ispruženi kažiprst, pinch,
+  otvoren dlan (i koliko su prsti rašireni), šaka, brzi tap prema kameri, okvir od dvije ruke.
+- Kad ruka zakloni oči, položaj glave se zadrži, a kad se lice opet vidi, kamera glatko nastavi.
+
 ### Test API
 
 Za automatske testove (Playwright) stranica izlaže `window.__ht`: `setHead([x, y, z])` (položaj glave u cm
 od centra prozora, `null` vraća praćenje), `setPreset(i)`, `setQuality('high'|'low')`, `setStereo(bool)`,
 `setCameraMode('orbit'|'window')`, `setOrbit({ az, el, zoom })` (orbita bez glave; `null` vraća upravljanje),
 `setGazeMode(1|2|3)`, `benchmark(n)` (ms po frameu bez vsynca) i `state()`.
+Ruke: `setHand({ tip: [x, y], r, gesture, spread, frame })` (NDC vrha prsta, `r` = udaljenost ruke / udaljenost
+glave, 0,62 je neutralno; `null` vraća kameru/miš), `tap([x, y])`, `markers(bool)` i `hand()` (trenutno stanje).
 
 ## Zasluge
 

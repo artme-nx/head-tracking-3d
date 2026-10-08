@@ -4,8 +4,13 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 import { loadSettings } from './config.js';
+import { VisionSource } from './tracking/vision.js';
 import { HeadTracker } from './tracking/headTracker.js';
+import { HandTracker } from './tracking/handTracker.js';
 import { MouseHead } from './tracking/mouseHead.js';
+import { MouseHand } from './tracking/mouseHand.js';
+import { HandInput } from './interaction/handInput.js';
+import { FingerMarkers } from './interaction/fingerMarker.js';
 import { applyOffAxis } from './projection/offAxis.js';
 import { getCanvasRect } from './projection/screenRect.js';
 import { AnaglyphRenderer } from './render/anaglyph.js';
@@ -137,8 +142,14 @@ function adaptResolution(now, frameMs) {
   const q = QUALITY[quality];
   const cap = Math.min(window.devicePixelRatio, q.pixelRatio);
   let next = adaptive.ratio;
-  if (avg > 18.2) next = adaptive.ratio - 0.125;
-  else if (avg < 17.4 && adaptive.ratio < cap && now - adaptive.lastProbe > 8000) {
+  // Detekcija (lice/ruke) u workeru dijeli GPU s renderom: ako gladuje, render
+  // spušta rezoluciju iako sam stiže 60 fps. Proba naviše čeka sve dulje ako je
+  // prethodna proba izgladnjela detekciju (bez titranja rezolucije).
+  const starved = vision.starved;
+  if (avg > 18.2 || starved) {
+    next = adaptive.ratio - 0.125;
+    if (starved && now - adaptive.lastProbe < 4000) adaptive.backoff = Math.min(60000, (adaptive.backoff ?? 8000) * 2);
+  } else if (avg < 17.4 && adaptive.ratio < cap && vision.healthy && now - adaptive.lastProbe > (adaptive.backoff ?? 8000)) {
     next = adaptive.ratio + 0.125;
     adaptive.lastProbe = now;
   }
@@ -253,8 +264,13 @@ loadDefaultHead()
 // ---------- UI ----------
 const hud = new Hud();
 const debug = new DebugOverlay();
-const tracker = new HeadTracker(settings);
+const vision = new VisionSource();
+const tracker = new HeadTracker(settings, vision);
+const hands = new HandTracker(settings, vision);
 const mouse = new MouseHead();
+const mouseHand = new MouseHand();
+const handInput = new HandInput();
+const markers = new FingerMarkers(scene);
 const panel = new CalibrationPanel(settings, (s) => {
   tracker.applySettings(s);
   laidOut = { w: 0, h: 0 };
@@ -291,6 +307,7 @@ let stereo = false;
 let mouseMode = false;
 let cameraFailed = false;
 let headOverride = null; // za automatske testove (window.__ht.setHead)
+let handOverride = null; // za automatske testove (window.__ht.setHand)
 
 // Generiranje geometrije (workeri) i HDRI krenu odmah u pozadini.
 setTimeout(() => {
@@ -385,7 +402,12 @@ window.addEventListener('keydown', (e) => {
       mouseMode = !mouseMode;
       hud.toast(mouseMode ? 'Miš glumi glavu' : 'Praćenje kamerom', 1400);
       break;
-    case 'h':
+    case 'h': {
+      const on = markers.toggle();
+      hud.toast(on ? 'Marker na vrhu prsta uključen' : 'Marker na vrhu prsta isključen', 1400);
+      break;
+    }
+    case 'u':
       hud.toggle();
       break;
     case 'v':
@@ -481,7 +503,7 @@ function updatePose(now, dt, rect) {
 
   if (mouseMode || cameraFailed || !tracker.ready) {
     // Miš glumi glavu: ručno (M), bez kamere, ili dok se kamera još pokreće.
-    pose.tracked = [...mouse.update(rect, dt)];
+    pose.tracked = [...mouse.update(rect, dt, mouseHand.capturesMouse)];
     pose.roll = 0;
     pose.weight = 1;
     source = 'miš';
@@ -492,13 +514,13 @@ function updatePose(now, dt, rect) {
         : 'Miš glumi glavu';
     hud.setStatus(cameraFailed || !tracker.ready ? 'idle' : 'mouse', label);
   } else {
-    const tracking = tracker.update(now);
+    const tracking = tracker.update(now, hands.boxes, dt);
     if (tracking) {
       pose.tracked = [...tracker.head];
       pose.roll = tracker.roll;
       // Pri ponovnom pronalasku lica glatko se vraćamo iz centra.
       pose.weight = Math.min(1, pose.weight + dt * 4);
-      hud.setStatus('tracking', 'Pratim glavu');
+      hud.setStatus('tracking', tracker.held ? 'Ruka ispred lica — držim položaj' : 'Pratim glavu');
     } else {
       // Lice izgubljeno: pogled se glatko vraća u centar.
       pose.weight = Math.max(0, pose.weight - dt * 1.2);
@@ -511,6 +533,18 @@ function updatePose(now, dt, rect) {
   for (let i = 0; i < 3; i++) pose.eye[i] = rest[i] + (pose.tracked[i] - rest[i]) * w;
   pose.eye[2] = Math.max(pose.eye[2], 5);
   return source;
+}
+
+// ---------- Doseg ruke ----------
+// Scena zadaje točku interesa i koliko je ispred nje vrh prsta u neutralnom
+// položaju ruke (near) i pri punom dosegu prema ekranu (far), u world cm.
+const reachTarget = new THREE.Vector3();
+function sceneReach(rect) {
+  const r = active.handReach?.();
+  if (r) return r;
+  if (active.orbitTarget) active.orbitTarget(reachTarget);
+  else reachTarget.set(rect.cx, rect.cy, -30);
+  return { target: reachTarget, near: 30, far: 0, minCam: 12 };
 }
 
 // ---------- Petlja ----------
@@ -543,6 +577,11 @@ function frame() {
   }
   world.position.set(rect.cx, rect.cy, 0);
   world.updateMatrixWorld(true);
+  // Detekcija (u načinu glavne niti) i ruke prije glave: glava treba okvire ruku
+  // da zna kad ruka zaklanja lice.
+  vision.update(now);
+  hands.update(now, pose.tracked[2]);
+  const mouseEvents = mouseHand.update(now, dt);
   const source = updatePose(now, dt, rect);
   updateOrbitCalibration(now, source, rect);
   // ORBIT ulaz: zadnji praćeni položaj glave; težina pada na 0 kad se lice izgubi.
@@ -550,6 +589,7 @@ function frame() {
   const orbitWeight = source === 'kamera' || source === 'centar' ? smoothstep(pose.weight) : 1;
   orbit.update(now, dt, orbitHead, orbitWeight);
   if (compiling) {
+    vision.afterRender();
     debug.tick(now);
     return;
   }
@@ -585,12 +625,24 @@ function frame() {
     }
   }
 
+  // Ruke u 3D: zrake iz trenutne kamere, dubina relativna na neutralnu.
+  const hand = handInput.update(now, dt, {
+    tracker: hands,
+    mouse: mouseHand,
+    mouseEvents,
+    camera: camMono,
+    reach: sceneReach(rect),
+    override: handOverride,
+  });
+
   active.update(t, dt, {
     eye: mode === 'orbit' ? camMono.position.toArray() : pose.eye,
     rect,
     cameraMode: mode,
     gazeMode: gazeModes[mode],
+    hand,
   });
+  markers.update(hand, camMono, dt, active.displayScale ?? 1);
 
   if (active.usesPost) {
     // Sjene se računaju jednom po frameu (refleksija, oba oka i bloom ih dijele).
@@ -612,13 +664,15 @@ function frame() {
     renderer.render(scene, camMono);
   }
 
+  // Novi frame kamere ide u worker tek sad, kad je ovaj frame predan GPU-u.
+  vision.afterRender();
   profiler.poll();
   debug.tick(now);
   const orbitInfo =
     mode === 'orbit'
       ? `ORBIT az ${orbit.az.toFixed(1)}° el ${(orbit.effectiveEl ?? orbit.el).toFixed(1)}° zoom ${(1 / orbit.zoom).toFixed(2)}×${orbit.calibrating ? ' · kalibriram' : ''}`
       : 'WINDOW';
-  debug.draw({ tracker, source, eye: pose.eye, rect, stereo, sceneName: active.name, quality: active.usesPost ? `${quality} ${renderer.getPixelRatio().toFixed(2)}×` : null, orbitInfo });
+  debug.draw({ tracker, hands, hand, vision, source, eye: pose.eye, rect, stereo, sceneName: active.name, quality: active.usesPost ? `${quality} ${renderer.getPixelRatio().toFixed(2)}×` : null, orbitInfo });
   panel.showMeasurement(pose.eye, source);
   orbitPanel.showState(mode === 'orbit' ? orbitInfo : 'Trenutna scena je u WINDOW načinu (M za orbit).');
 }
@@ -639,9 +693,49 @@ function benchmark(n = 30) {
   return +ms.toFixed(2);
 }
 
+function setHandOverride(o) {
+  if (!o) {
+    handOverride = null;
+    return;
+  }
+  const prev = handOverride;
+  const logR = Math.log(o.r ?? 0.62);
+  const tip = o.tip ?? [0, 0];
+  const pinch = o.pinchAt ?? tip;
+  const track = prev?.track ?? { id: 'test', label: 'T', simulated: true, pts: { tip: [0, 0, 0], pinch: [0, 0, 0], palm: [0, 0, 0] } };
+  if (track.gesture !== (o.gesture ?? 'point')) track.gestureSince = performance.now();
+  track.gesture = o.gesture ?? 'point';
+  track.spread = o.spread ?? 0;
+  track.pinch = track.gesture === 'pinch' ? 1 : 0;
+  track.pts.tip = [tip[0], tip[1], logR];
+  track.pts.pinch = [pinch[0], pinch[1], logR];
+  track.pts.palm = [tip[0], tip[1] - 0.12, logR + 0.05];
+  track.distanceCm = 37;
+  handOverride = {
+    track,
+    events: prev?.events ?? [],
+    frame: o.frame ? { valid: true, rect: { x0: o.frame[0], y0: o.frame[1], x1: o.frame[2], y1: o.frame[3] }, since: prev?.frame?.valid ? prev.frame.since : performance.now() } : { valid: false },
+  };
+  if (o.gesture === null || o.gesture === 'away') handOverride.track = null;
+}
+
 // Mali API za automatske testove i snimanje (Playwright): window.__ht
 window.__ht = {
   setHead: (v) => (headOverride = v ? [...v] : null),
+  /**
+   * Ruka bez kamere: { tip:[x,y] (NDC), r (udaljenost ruke / glave, 0.62 = neutralno),
+   * gesture: 'point'|'pinch'|'open'|'fist'|'none', spread, two?: {rect} }; null vraća kameru/miš.
+   */
+  setHand: (o) => setHandOverride(o),
+  tap: (ndc) => {
+    if (!handOverride) setHandOverride({ tip: ndc, gesture: 'point' });
+    handOverride.events.push({ type: 'tap', hand: 'test', ndc: [...(ndc ?? handOverride.track.pts.tip)] });
+  },
+  markers: (on) => markers.toggle(on),
+  hand: () => handInput.ctx,
+  vision,
+  hands,
+  tracker,
   setPreset: (i) => setPreset(i),
   setQuality: (q) => setQuality(q),
   setStereo: (b) => (stereo = !!b),

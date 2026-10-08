@@ -723,6 +723,16 @@ export class MuseumScene {
     return this.display.localToWorld(out.copy(this.sphereCenter));
   }
 
+  /** Doseg ruke: neutralno ~27 cm ispred stakla, puni doseg tik ispred prednjeg stakla. */
+  handReach() {
+    const s = this.displayScale ?? 1;
+    this.reach ??= { target: new THREE.Vector3(), near: 0, far: 0, minCam: 12 };
+    this.orbitTarget(this.reach.target);
+    this.reach.near = 40 * s;
+    this.reach.far = (L.glass.d / 2 + 1.2) * s;
+    return this.reach;
+  }
+
   /** ORBIT: kamera ostaje iznad poda, ispod stropa i unutar zidova galerije. */
   orbitLimits() {
     const s = this.displayScale ?? 1;

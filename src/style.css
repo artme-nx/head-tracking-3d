@@ -79,6 +79,7 @@ html, body {
   backdrop-filter: blur(10px);
 }
 .hud__keys { opacity: 0.75; }
+.hud__hands { opacity: 0.5; flex-basis: 100%; }
 .hud__hint { opacity: 0.45; flex-basis: 100%; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-text-muted); }
 .dot[data-state='tracking'] { background: var(--color-ok); box-shadow: 0 0 8px var(--color-ok); }
@@ -111,7 +112,7 @@ kbd + kbd { margin-left: 0; }
   backdrop-filter: blur(10px);
   pointer-events: none;
 }
-.debug canvas { display: block; width: 240px; height: 180px; border-radius: var(--radius-sm); }
+.debug canvas { display: block; width: 320px; height: 180px; border-radius: var(--radius-sm); }
 .debug pre { margin: var(--space-2) 2px 0; font: 11.5px/1.5 var(--font-mono); color: var(--gray-300); }
 
 /* Kalibracijski panel */
@@ -247,5 +248,5 @@ kbd + kbd { margin-left: 0; }
 .mode-badge.is-out { opacity: 0; }
 
 @media (max-width: 640px) {
-  .hud__keys, .hud__hint { display: none; }
+  .hud__keys, .hud__hint, .hud__hands { display: none; }
 }

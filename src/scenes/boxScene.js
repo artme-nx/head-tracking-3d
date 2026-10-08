@@ -143,6 +143,14 @@ export class BoxScene {
     cam.updateProjectionMatrix();
   }
 
+  /** Doseg ruke: neutralno na ravnini ekrana, puni doseg do blizu stražnjeg zida kutije. */
+  handReach() {
+    this.group.updateMatrixWorld();
+    this.reach ??= { target: new THREE.Vector3(), near: DEPTH / 2, far: -DEPTH * 0.4, minCam: 10 };
+    this.group.localToWorld(this.reach.target.set(0, 0, -DEPTH / 2));
+    return this.reach;
+  }
+
   update(t) {
     // Lagano lebdenje meta — dovoljno da oko primijeti volumen, ne previše.
     this.targets.forEach((tg, i) => {

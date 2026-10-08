@@ -686,6 +686,16 @@ export class RobotScene {
     return this.root.localToWorld(out.set(0, 0.8, -5.5));
   }
 
+  /** Doseg ruke: neutralno ~45 cm ispred glave, puni doseg do lica (dodir). */
+  handReach() {
+    const s = this.displayScale ?? 1;
+    this.reach ??= { target: new THREE.Vector3(), near: 0, far: 0, minCam: 12 };
+    this.orbitTarget(this.reach.target);
+    this.reach.near = 45 * s;
+    this.reach.far = 3 * s;
+    return this.reach;
+  }
+
   orbitLimits() {
     const s = this.displayScale ?? 1;
     const y0 = this.display.getWorldPosition(_v).y;
