@@ -11,6 +11,7 @@ export const GESTURE_LABEL = {
   pinch: 'pinch',
   open: 'otvoren dlan',
   fist: 'šaka',
+  frame: 'okvir',
 };
 
 const FINGERS = [

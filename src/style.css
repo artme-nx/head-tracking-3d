@@ -247,6 +247,65 @@ kbd + kbd { margin-left: 0; }
 .mode-badge[hidden] { display: none; }
 .mode-badge.is-out { opacity: 0; }
 
+/* Redateljski okvir: tražilo i letterbox */
+.viewfinder { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+.viewfinder[hidden] { display: none; }
+.viewfinder__box {
+  position: absolute;
+  border: 1px solid rgb(255 255 255 / 0.2);
+  box-shadow: 0 0 0 200vmax rgb(0 0 0 / 0.16);
+}
+.viewfinder__corner { position: absolute; width: 20px; height: 20px; border: 2px solid rgb(255 255 255 / 0.92); }
+.viewfinder__corner--tl { left: -2px; top: -2px; border-right: 0; border-bottom: 0; }
+.viewfinder__corner--tr { right: -2px; top: -2px; border-left: 0; border-bottom: 0; }
+.viewfinder__corner--bl { left: -2px; bottom: -2px; border-right: 0; border-top: 0; }
+.viewfinder__corner--br { right: -2px; bottom: -2px; border-left: 0; border-top: 0; }
+.viewfinder__third { position: absolute; background: rgb(255 255 255 / 0.11); }
+.viewfinder__third--v1, .viewfinder__third--v2 { top: 0; bottom: 0; width: 1px; }
+.viewfinder__third--v1 { left: 33.333%; }
+.viewfinder__third--v2 { left: 66.666%; }
+.viewfinder__third--h1, .viewfinder__third--h2 { left: 0; right: 0; height: 1px; }
+.viewfinder__third--h1 { top: 33.333%; }
+.viewfinder__third--h2 { top: 66.666%; }
+.viewfinder__cross { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; }
+.viewfinder__cross::before, .viewfinder__cross::after { content: ''; position: absolute; background: rgb(255 255 255 / 0.55); }
+.viewfinder__cross::before { left: 6.5px; top: 0; width: 1px; height: 14px; }
+.viewfinder__cross::after { top: 6.5px; left: 0; height: 1px; width: 14px; }
+.viewfinder__label {
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  font: 600 11px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  color: rgb(255 255 255 / 0.9);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.6);
+}
+.viewfinder__label::before {
+  content: '';
+  display: inline-block;
+  width: 6px; height: 6px;
+  margin: 0 7px 1px 0;
+  border-radius: 50%;
+  background: var(--red-400);
+  box-shadow: 0 0 6px var(--red-400);
+  animation: vf-rec 1.2s steps(2, jump-none) infinite;
+}
+.viewfinder__hold {
+  position: absolute;
+  left: 12px; right: 12px; bottom: 10px;
+  height: 1.5px;
+  background: rgb(255 255 255 / 0.7);
+  transform-origin: left center;
+  transform: scaleX(0);
+}
+.viewfinder.is-commit .viewfinder__box { animation: vf-commit 0.7s ease-out forwards; }
+@keyframes vf-rec { 50% { opacity: 0.25; } }
+@keyframes vf-commit {
+  0% { border-color: rgb(255 255 255 / 0.9); }
+  100% { border-color: rgb(255 255 255 / 0); opacity: 0; }
+}
+.letterbox { position: fixed; background: #000; pointer-events: none; display: none; }
+
 @media (max-width: 640px) {
   .hud__keys, .hud__hint, .hud__hands { display: none; }
 }

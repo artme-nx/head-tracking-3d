@@ -164,6 +164,9 @@ export class HandInput {
       hands.push(v);
     }
 
+    // Dok dvije ruke tvore redateljski okvir, pojedinačne geste (kažiprst…) se ne tumače.
+    if (frame?.valid) for (const v of hands) if (v.alive) v.gesture = 'frame';
+
     // Primarna ruka: najvažnija gesta; pri jednakoj prednost ima dosadašnja.
     let primary = null;
     for (const v of hands) {

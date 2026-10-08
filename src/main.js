@@ -11,6 +11,7 @@ import { MouseHead } from './tracking/mouseHead.js';
 import { MouseHand } from './tracking/mouseHand.js';
 import { HandInput } from './interaction/handInput.js';
 import { FingerMarkers } from './interaction/fingerMarker.js';
+import { DirectorFrame } from './interaction/directorFrame.js';
 import { applyOffAxis } from './projection/offAxis.js';
 import { getCanvasRect } from './projection/screenRect.js';
 import { AnaglyphRenderer } from './render/anaglyph.js';
@@ -205,6 +206,7 @@ function switchTo(next, index) {
     world.remove(active.group);
     active.deactivate?.();
   }
+  director.reset(true); // izrez kadra pripada sceni
   active = next;
   world.add(active.group);
 
@@ -271,6 +273,7 @@ const mouse = new MouseHead();
 const mouseHand = new MouseHand();
 const handInput = new HandInput();
 const markers = new FingerMarkers(scene);
+const director = new DirectorFrame();
 const panel = new CalibrationPanel(settings, (s) => {
   tracker.applySettings(s);
   laidOut = { w: 0, h: 0 };
@@ -625,13 +628,24 @@ function frame() {
     }
   }
 
+  // Redateljski okvir: izrez kadra (zoom + reframe) preko projekcije kamere; sidro
+  // se računa iz neizrezane kamere, a zrake ruku iz izrezane (pokazuje se ono što se vidi).
+  const reach = sceneReach(rect);
+  camMono.updateMatrixWorld();
+  director.update(now, dt, handInput.ctx, camMono, camMono.position.distanceTo(reach.target));
+  director.apply(camMono);
+  if (stereo) {
+    director.apply(camLeft);
+    director.apply(camRight);
+  }
+
   // Ruke u 3D: zrake iz trenutne kamere, dubina relativna na neutralnu.
   const hand = handInput.update(now, dt, {
     tracker: hands,
     mouse: mouseHand,
     mouseEvents,
     camera: camMono,
-    reach: sceneReach(rect),
+    reach,
     override: handOverride,
   });
 

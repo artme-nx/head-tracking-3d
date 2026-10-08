@@ -5,13 +5,29 @@ a 3D scena se iscrtava off-axis projekcijom tako da se monitor ponaša kao **pro
 kad pomakneš glavu, perspektiva se mijenja kao u stvarnosti (efekt Johnny Lee /
 Sony Spatial Reality Display).
 
+**Glava upravlja kamerom, ruke upravljaju objektom:** ista kamera prati i do dvije ruke — robot prati vrh
+tvog prsta, ljuti se kad ga diraš i rastavlja se na otvoren dlan; u vitrini prst postaje svjetiljka, pinchom
+izvlačiš kristalnu jezgru, a kucanjem titra staklo; dvjema rukama uokviriš kadar kao redatelj.
+
 **Živo:** https://artme-nx.github.io/head-tracking-3d/
 
 | Muzejska vitrina | Odozgo (kaustike, sjena rešetke) | Robot |
 | --- | --- | --- |
 | ![Muzejska vitrina](docs/screenshots/muzej-vitrina.jpg) | ![Vitrina odozgo](docs/screenshots/muzej-odozgo.jpg) | ![Robot](docs/screenshots/robot.jpg) |
 
-Stack: Vite + vanilla JS + Three.js, MediaPipe Tasks Vision (FaceLandmarker),
+| Robot prati prst | Prekrižene oči (prst blizu lica) | Ljutnja (prst predugo blizu) |
+| --- | --- | --- |
+| ![Robot prati prst](docs/screenshots/robot-prati-prst.jpg) | ![Prekrižene oči](docs/screenshots/robot-prekrizene-oci.jpg) | ![Ljuti robot](docs/screenshots/robot-ljutnja.jpg) |
+
+| Rastavljen robot (otvoren dlan) | Rastavljen — s boka | Redateljski okvir → izrez kadra |
+| --- | --- | --- |
+| ![Rastavljen robot](docs/screenshots/robot-rastavljen.jpg) | ![Rastavljen robot s boka](docs/screenshots/robot-rastavljen-bok.jpg) | ![Redateljski okvir](docs/screenshots/redateljski-okvir.jpg) |
+
+| Prst kao svjetiljka | Izvučena kristalna jezgra | Val na staklu (kucanje) |
+| --- | --- | --- |
+| ![Svjetiljka u vitrini](docs/screenshots/vitrina-svjetiljka.jpg) | ![Izvučena jezgra](docs/screenshots/vitrina-jezgra.jpg) | ![Val na staklu](docs/screenshots/vitrina-val.jpg) |
+
+Stack: Vite + vanilla JS + Three.js, MediaPipe Tasks Vision (FaceLandmarker + HandLandmarker),
 Spark (`@sparkjsdev/spark`) za Gaussian splatove, pmndrs `postprocessing` + N8AO
 za AAA scene, meshoptimizer za generiranu geometriju.
 
@@ -69,6 +85,34 @@ za AAA scene, meshoptimizer za generiranu geometriju.
 - **Vlastita glava:** dok si na sceni 4, ispusti .glb/.gltf glave — model sjeda na vrat, dobiva duplje i
   iste mehaničke oči (automatsko pozicioniranje). `↑`/`↓` fino pomiče oči, `[`/`]` veličina, `R` okret.
 
+## Ruke — geste
+
+Kamera vidi ruke koje su podignute ispred ekrana (otprilike u visini lica). Položaj ruke u kadru postaje
+točka u 3D sceni, a **primicanje ruke ekranu gura točku dublje prema objektu** (dubina iz veličine dlana,
+relativno na udaljenost tvoje glave). Bez kamere geste se mogu glumiti mišem (vidi Prečaci).
+
+| Gesta | Kako | Kutija / Model | Muzejska vitrina | Robot |
+| --- | --- | --- | --- | --- |
+| **Ispruženi kažiprst** | kažiprst gore, ostali prsti savijeni | marker na vrhu prsta (`H`) | prst je **svjetiljka**: topli izvor na vrhu prsta, odsjaji po kromu, sjene, kaustike | **oči prate vrh prsta**; blizu lica konvergiraju (prekriže se) i blende se suze |
+| **Dodir** (kažiprstom) | primakni prst robotovu licu | — | — | robot se **trgne** (glava ustukne, oči bljesnu, blende se zatvore pa otvore); prst blizu > ~2 s → **ljutnja** (crvene oči, pulsiranje, servo trzaji) |
+| **Pinch** | spoji vrhove palca i kažiprsta | — | blizu skulpture **uhvati kristalnu jezgru**; povuci prema sebi — izlazi kroz rešetku, prati ruku, može i ispred stakla; pusti — elastično se vrati | — |
+| **Otvoren dlan** | svi prsti ispruženi i **rašireni** | — | — | **rastavljanje** glave i poprsja; količina prati koliko su prsti rašireni (ostaje kad spustiš ruku) |
+| **Šaka** | svi prsti savijeni, palac uvučen | vraća normalni kadar | vraća normalni kadar | **sklapanje** obrnutim redom, s "klikom" i bljeskom spojeva; vraća normalni kadar |
+| **Tap** | brzi kratki pokret ruke prema ekranu | — | **kucanje po staklu**: val preko stakla, prašina se uskovitla, skulptura se zanjiše | — |
+| **Okvir od dvije ruke** | palci i kažiprsti tvore pravokutnik (dva "L"), drži ~0,7 s | **redateljski izrez kadra** | isto | isto |
+
+Prepoznavanje ima histerezu (strožiji uvjet za ulazak u gestu nego za izlazak), vrijeme potvrde i cooldown,
+pa geste ne trepere. Dok dvije ruke tvore okvir, pojedinačne geste se ne tumače.
+
+### Redateljski okvir (sve scene)
+
+Kad dvjema rukama napraviš pravokutnik, na ekranu se pokaže tanko **tražilo**: kutne oznake, trećine, križić u
+sredini i omjer slike (zaokružen na filmski: 1:1, 4:3, 3:2, 16:9, 1.85:1, 2:1, 2.39:1), a traka u dnu pokazuje
+koliko još treba držati. Nakon ~0,7 s kamera glatko **izreže kadar** na taj dio scene (zoom i reframe kroz
+projekciju), uz letterbox trake prema omjeru i blagi prebačaj kao kod kamermana. Izrez je usidren na točku u
+sceni, pa glava i dalje upravlja kamerom (WINDOW i ORBIT), a uokvireni dio ostaje u kadru. Novi okvir unutar
+izreza izrezuje dalje; **šaka** ili **širok okvir** (preko ~3/4 ekrana) vraćaju normalni kadar.
+
 ## Pokretanje
 
 ```bash
@@ -102,6 +146,13 @@ npm run preview   # lokalni pregled builda
 | `K` | miš glumi glavu (kotačić = naprijed/natrag) |
 | `H` | diskretan sjajni marker na vrhu prsta (ruke) |
 | `U` | sakrij sučelje |
+| `Shift` + miš | miš glumi vrh ispruženog kažiprsta |
+| `Shift` + klik (drži) | pinch |
+| `Shift` + kotačić | dubina prsta (prema ekranu / prema sebi) |
+| `O` (drži) | otvoren dlan — prsti se postupno šire dok držiš |
+| `Z` (drži) | šaka |
+| `Space` | brzi tap prema ekranu |
+| `B` (drži) + miš | okvir od dvije ruke: vuci pravokutnik od točke pritiska |
 | `V` | vrtnja modela (scena 2) |
 | `R` | okreni model naopako (česta potreba kod splatova) |
 | `[` / `]` | smanji / povećaj model |
@@ -111,11 +162,8 @@ npm run preview   # lokalni pregled builda
 ako ih ima) ili Gaussian splat `.ply` / `.splat` / `.spz` / `.ksplat` bilo gdje u prozor.
 Model se automatski centrira i skalira da stane u scenu.
 
-Bez kamere (odbijena dozvola, nema uređaja) miš automatski glumi glavu.
-
-**Ruke bez kamere (miš glumi ruku):** `Shift` + miš = vrh ispruženog kažiprsta, `Shift` + klik (drži) =
-pinch, `Shift` + kotačić = dubina prsta, `O` (drži) = otvoren dlan (prsti se postupno šire), `Z` (drži) =
-šaka, `Space` = brzi tap prema ekranu, `B` (drži) + miš = okvir od dvije ruke.
+Bez kamere (odbijena dozvola, nema uređaja) miš automatski glumi glavu, a ruke se glume mišem i tipkama
+`Shift`, `O`, `Z`, `Space` i `B` iz tablice iznad.
 
 ## ORBIT ili WINDOW — dva načina kamere
 
@@ -204,7 +252,8 @@ iz `window.screenX/Y`, pa je "prozor u svijet" upravo onaj dio ekrana koji prozo
 
 ## Kako radi
 
-- **Praćenje** (`src/tracking/`): FaceLandmarker daje središta šarenica (landmarke 468 i 473).
+- **Praćenje** (`src/tracking/`): FaceLandmarker daje središta šarenica (landmarke 468 i 473); lice i ruke
+  detektiraju se u dva web workera (vidi Praćenje ruku).
   Udaljenost od ekrana procjenjuje se pinhole modelom iz razmaka zjenica u pikselima,
   `z = f · IPD / d`, gdje je `f` fokalna duljina iz horizontalnog FOV-a kamere; projicirani
   razmak korigira se za okret glave (yaw) iz transformacijske matrice lica. X/Y slijede iz
@@ -239,6 +288,11 @@ iz `window.screenX/Y`, pa je "prozor u svijet" upravo onaj dio ekrana koji prozo
   otvoren dlan (i koliko su prsti rašireni), šaka, brzi tap prema kameri, okvir od dvije ruke.
 - Kad ruka zakloni oči, položaj glave se zadrži, a kad se lice opet vidi, kamera glatko nastavi.
 
+- **Ruke u sceni:** robot (`src/scenes/robot/`: `explode.js` redoslijed i opruge rastavljanja, `internals.js`
+  unutarnja mehanika, kavezi glave i poprsja u `geometry/robotModels.js`), vitrina
+  (`src/scenes/museum/handInteraction.js`), titranje stakla (`render/ripple.js` + materijal stakla) i redateljski
+  okvir (`src/interaction/directorFrame.js`).
+
 ### Test API
 
 Za automatske testove (Playwright) stranica izlaže `window.__ht`: `setHead([x, y, z])` (položaj glave u cm
@@ -246,7 +300,8 @@ od centra prozora, `null` vraća praćenje), `setPreset(i)`, `setQuality('high'|
 `setCameraMode('orbit'|'window')`, `setOrbit({ az, el, zoom })` (orbita bez glave; `null` vraća upravljanje),
 `setGazeMode(1|2|3)`, `benchmark(n)` (ms po frameu bez vsynca) i `state()`.
 Ruke: `setHand({ tip: [x, y], r, gesture, spread, frame })` (NDC vrha prsta, `r` = udaljenost ruke / udaljenost
-glave, 0,62 je neutralno; `null` vraća kameru/miš), `tap([x, y])`, `markers(bool)` i `hand()` (trenutno stanje).
+glave, 0,62 je neutralno; `frame: [x0, y0, x1, y1]` = okvir od dvije ruke u NDC; `null` vraća kameru/miš),
+`tap([x, y])`, `markers(bool)` i `hand()` (trenutno stanje).
 
 ## Zasluge
 
@@ -255,6 +310,6 @@ glave, 0,62 je neutralno; `null` vraća kameru/miš), `tap([x, y])`, `markers(bo
   [Poly Haven](https://polyhaven.com), CC0.
 - Fontovi Cormorant Garamond i Barlow Condensed — SIL Open Font License.
 - pmndrs `postprocessing` (Zlib), N8AO (ISC), meshoptimizer (MIT).
-- Face Landmarker model: Google MediaPipe (Apache 2.0).
+- Face Landmarker i Hand Landmarker modeli: Google MediaPipe (Apache 2.0).
 - Ideja: Johnny Chung Lee, *Head Tracking for Desktop VR Displays using the Wii Remote* (2007);
   Robert Kooima, *Generalized Perspective Projection* (2008).
