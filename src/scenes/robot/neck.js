@@ -1,6 +1,8 @@
 // Mehanika vrata: kralježnični stup od diskova, hidraulički cilindri (tijelo +
 // kromirana klipnjača koja klizi), pleteni kabeli i rebrasto crijevo grla.
 // Sve se svaki frame prilagođava trenutnom položaju glave (glava ima inerciju).
+// Pri rastavljanju (unplug 0..1) kabeli se iskopčaju iz glave (utikač izađe duž
+// smjera kabela), a bočni klipovi se uvuku — tek tada se kranij smije razmaknuti.
 
 import * as THREE from 'three';
 
@@ -189,13 +191,22 @@ export class NeckRig {
       [5.9, -6.9, -9.4, 9.6, -21.9, -8.4, 0.27],
       [4.6, -8.4, -11.6, 6.4, -21.2, -12.0, 0.22],
     ];
+    // Utikač na kraju kabela: dok je ukopčan, cijeli je u glavi (ne vidi se).
+    const plugGeo = new THREE.CylinderGeometry(1, 1, 1, 20).translate(0, 0.5, 0);
     for (const sx of [-1, 1]) {
       for (const [hx, hy, hz, bx, by, bz, r] of cableSpec) {
         const tube = new FlexTube(mats.braided, { radius: r, segments: 40, radial: 10 });
         this.group.add(tube.mesh);
-        this.cables.push({ tube, h: new THREE.Vector3(sx * hx, hy, hz), b: new THREE.Vector3(sx * bx, by, bz), sx });
+        const h = new THREE.Vector3(sx * hx, hy, hz);
+        const exitDir = new THREE.Vector3(sx * 0.6, -1.6, -0.4).normalize();
+        const plug = new THREE.Mesh(plugGeo, mats.anodized);
+        plug.scale.set(r * 1.55, 1.1, r * 1.55);
+        plug.castShadow = true;
+        this.group.add(plug);
+        this.cables.push({ tube, h, exitDir, plug, b: new THREE.Vector3(sx * bx, by, bz), sx });
       }
     }
+    this.unplug = 0; // 0 = ukopčano, 1 = kabeli izvučeni i bočni klipovi uvučeni
     // Rebrasto crijevo grla.
     this.hose = new FlexTube(mats.rubber, { radius: 0.62, segments: 64, radial: 16, ripple: 0.16 });
     this.group.add(this.hose.mesh);
@@ -234,11 +245,23 @@ export class NeckRig {
       v.quaternion.slerpQuaternions(this._q0, this._qh, t);
     });
 
-    for (const { p, a, b } of this.pistons) p.update(a, this.headToRoot(b, _a.clone()));
+    const u = this.unplug;
+    this.pistons.forEach(({ p, a, b }, i) => {
+      const top = this.headToRoot(b, _a.clone());
+      // Bočni klipovi (2, 3) se pri rastavljanju uvuku i oslobode kranij.
+      if (i >= 2 && u > 0) top.addScaledVector(_d.subVectors(top, a).normalize(), -3.2 * u);
+      p.update(a, top);
+    });
 
-    for (const { tube, h, b, sx } of this.cables) {
-      const hp = this.headToRoot(h, new THREE.Vector3());
-      const exit = this.headToRoot(_b.set(h.x + sx * 0.6, h.y - 1.6, h.z - 0.4), new THREE.Vector3());
+    for (const { tube, h, exitDir, plug, b, sx } of this.cables) {
+      const pull = 2.8 * u;
+      const hp = this.headToRoot(_b.copy(h).addScaledVector(exitDir, pull), new THREE.Vector3());
+      const exit = this.headToRoot(_b.set(h.x + sx * 0.6, h.y - 1.6, h.z - 0.4).addScaledVector(exitDir, pull), new THREE.Vector3());
+      // Utikač: od kraja kabela unatrag u glavu (dužine 1,1).
+      const dir = _d.subVectors(exit, hp).normalize();
+      plug.position.copy(hp).addScaledVector(dir, -1.1 + 0.15);
+      plug.quaternion.setFromUnitVectors(UP, dir);
+      plug.visible = u > 0.001;
       const mid = new THREE.Vector3().lerpVectors(hp, b, 0.55);
       mid.x += sx * 1.4;
       mid.z -= 0.9;

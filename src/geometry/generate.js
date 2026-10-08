@@ -23,6 +23,7 @@ export function generateSDF(name, params = {}) {
         g.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
         g.setAttribute('normal', new THREE.BufferAttribute(m.normals, 3));
         g.setIndex(new THREE.BufferAttribute(m.indices, 1));
+        if (m.depth) g.setAttribute('shellDepth', new THREE.BufferAttribute(m.depth, 1));
         g.computeBoundingBox();
         g.computeBoundingSphere();
         geometries[m.name] = g;

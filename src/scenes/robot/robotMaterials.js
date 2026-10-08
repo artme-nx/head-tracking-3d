@@ -51,7 +51,11 @@ export function ceramicMaterial({ color = '#d4d1cb', panelGLSL = 'return 1e3;', 
   return extendMaterial(m, {
     key: `${key}${N}`,
     uniforms,
+    // Dubina vrha ispod vanjske površine (iz SDF-a): 0 vani, ~-0,4 na unutarnjoj plohi panela.
+    vertexPars: 'attribute float shellDepth; varying float vShellDepth;',
+    vertexMain: 'vShellDepth = shellDepth;',
     fragmentPars: /* glsl */ `
+      varying float vShellDepth;
       #define DECALS ${N}
       uniform sampler2D decalAtlas;
       uniform vec3 decalCenter[DECALS];
@@ -60,6 +64,7 @@ export function ceramicMaterial({ color = '#d4d1cb', panelGLSL = 'return 1e3;', 
       uniform vec3 decalN[DECALS];
       uniform vec4 decalRect[DECALS];
       uniform vec3 decalColor[DECALS];
+      float innerSide;
       float panelDist( vec3 p ) { ${panelGLSL} }
       float panelLine;
       float panelEdge;
@@ -93,10 +98,19 @@ export function ceramicMaterial({ color = '#d4d1cb', panelGLSL = 'return 1e3;', 
           }
           diffuseColor.rgb = mix( diffuseColor.rgb, decalTint, decalMask * 0.92 );
           #endif
+          // Unutarnja ploha ljuske (vidi se tek kad je robot rastavljen): tamni, mat kompozit.
+          innerSide = smoothstep( 0.14, 0.32, -vShellDepth );
+          diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.05, 0.052, 0.056 ) * ( 0.85 + 0.3 * vnoise( vObjPos * 6.0 ) ), innerSide * 0.94 );
         }
       `,
       roughnessmap_fragment: /* glsl */ `
         roughnessFactor = clamp( roughnessFactor + panelLine * 0.4 + decalMask * 0.12 + ( vnoise( vObjPos * 1.7 + 4.0 ) - 0.5 ) * 0.06, 0.04, 1.0 );
+        roughnessFactor = mix( roughnessFactor, 0.8, innerSide );
+      `,
+      lights_physical_fragment: /* glsl */ `
+        #ifdef USE_CLEARCOAT
+          material.clearcoat *= 1.0 - innerSide;
+        #endif
       `,
       normal_fragment_maps: /* glsl */ `
         {

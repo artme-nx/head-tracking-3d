@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { generateSDF } from '../../geometry/generate.js';
-import { EYE_X, EYE_Z, SOCKET_R } from '../../geometry/robotModels.js';
+import { EYE_X, EYE_Z, SOCKET_R, headSolid } from '../../geometry/robotModels.js';
 import { loadStudioHDR, buildStudioEnvironment } from '../../render/environment.js';
 import { configurePCSSSpot } from '../../render/pcss.js';
 import { chromeMaterial, extendMaterial } from '../../render/materials.js';
@@ -12,6 +12,8 @@ import { createRingTextTexture, loadFonts } from '../../render/proceduralTexture
 import { EyeUnit } from './eye.js';
 import { GazeController } from './gaze.js';
 import { NeckRig } from './neck.js';
+import { buildInternals } from './internals.js';
+import { ExplodeController } from './explode.js';
 import {
   ceramicMaterial,
   carbonMaterial,
@@ -27,6 +29,7 @@ const EYE_COLORS = {
   cijan: new THREE.Color('#79e6ff'),
   jantar: new THREE.Color('#ffae42'),
 };
+const ANGRY = new THREE.Color('#ff2a12');
 
 // Položaj robota: središte između očiju (cm, prostor prozora) i mjerilo.
 const ROBOT = { y: 3.6, z: -64, scale: 0.86 };
@@ -97,6 +100,31 @@ export class RobotScene {
     this.time = 0;
     this.custom = null;
     this.customEyeOffset = 0;
+    // Ruke: pažnja prema prstu, dodir/ljutnja, rastavljanje.
+    this.fingerAttn = 0;
+    this.fingerWorld = new THREE.Vector3(0, 0, 30);
+    this.fingerEyeDist = 100;
+    this.fingerNear = Infinity;
+    this.touching = false;
+    this.touchTime = 0;
+    this.anger = 0;
+    this.recoil = 0;
+    this.recoilV = 0;
+    this.recoilSide = 1;
+    this.flash = 0;
+    this.startle = 0;
+    this.irisSnap = 0;
+    this.irisSnapT = -1;
+    this.ledFlash = 0;
+    this.seamFlash = 0;
+    this.twitch = new THREE.Vector2();
+    this.twitchV = new THREE.Vector2();
+    this.nextTwitch = 0;
+    this.explodeTarget = 0;
+    this.openHist = [];
+    this.openLatched = false;
+    this.wasExploded = false;
+    this.displayColor = new THREE.Color();
   }
 
   init() {
@@ -204,12 +232,27 @@ export class RobotScene {
     M.ceramicDark.clearcoatRoughness = 0.3;
     M.ceramicDark.roughness = 0.58;
     M.ceramicDark.color.set('#17181b');
-    const bodyMats = { chest: M.ceramicBody, shoulders: M.ceramicDark, trapezius: M.carbon, core: M.skull };
+    // Unutarnji kavezi: tamni grafit; pri "kliku" spojeva kratko zasvijetle (bljesak kroz procjepe).
+    M.cage = graphiteMaterial('#15171a');
+    M.cage.roughness = 0.46;
+    M.cage.emissive = new THREE.Color(0);
+    M.cage.emissiveIntensity = 1;
+    M.cage.userData.darkEnv = true;
+    const bodyMats = { chest: M.ceramicBody, shoulderL: M.ceramicDark, shoulderR: M.ceramicDark, trapezius: M.carbon, cage: M.cage };
+    // Paneli koji se pri rastavljanju pomiču dobivaju vlastitu grupu (pomak), ostali stoje.
+    this.panels = {};
     for (const [name, geo] of Object.entries(body)) {
       const mesh = new THREE.Mesh(geo, bodyMats[name] ?? M.graphite);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      this.torso.add(mesh);
+      if (name === 'chest' || name.startsWith('shoulder')) {
+        const g = new THREE.Group();
+        g.add(mesh);
+        this.torso.add(g);
+        this.panels[name] = g;
+      } else {
+        this.torso.add(mesh);
+      }
     }
     // Ključne kosti: titanijske šipke od prsne kosti prema ramenima.
     for (const sx of [-1, 1]) {
@@ -227,7 +270,7 @@ export class RobotScene {
     const ledRing = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.06, 12, 48), new THREE.MeshBasicMaterial({ toneMapped: false }));
     ledRing.position.set(0, -26.1, 1.2);
     ledRing.rotation.x = -0.25;
-    this.torso.add(ledRing);
+    this.panels.chest.add(ledRing);
     this.leds.push([ledRing, 3]);
 
     // Zglobovi: vrat → glava.
@@ -267,15 +310,33 @@ export class RobotScene {
     M.ceramicCranium.roughness = 0.58;
     M.ceramicCranium.color.set('#17181b');
     M.titanium = new THREE.MeshPhysicalMaterial({ color: '#8c939c', metalness: 1, roughness: 0.26, envMapIntensity: 1.1 });
-    const headMats = { face: M.ceramicFace, jaw: M.ceramicFace, cranium: M.ceramicCranium, crest: M.titanium, skull: M.skull };
+    const headMats = { face: M.ceramicFace, jaw: M.ceramicFace, craniumL: M.ceramicCranium, craniumR: M.ceramicCranium, crest: M.titanium, cage: M.cage };
     for (const [name, geo] of Object.entries(head)) {
       const mesh = new THREE.Mesh(geo, headMats[name] ?? M.graphite);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      this.procHead.add(mesh);
+      if (name === 'cage') {
+        this.procHead.add(mesh);
+      } else {
+        const g = new THREE.Group();
+        g.add(mesh);
+        this.procHead.add(g);
+        this.panels[name] = g;
+      }
     }
-    this.#buildEars(this.procHead);
+    this.#buildEars({ [-1]: this.panels.craniumL, [1]: this.panels.craniumR });
     this.#buildTempleMechanics(this.procHead);
+
+    // Unutarnja mehanika (vidi se samo rastavljena).
+    this.internals = buildInternals(M);
+    this.procHead.add(this.internals.head);
+    this.torso.add(this.internals.torso);
+    // Svjetlo reaktora je uvijek u sceni (intenzitet 0 dok je sklopljeno): skriveno svjetlo
+    // ne ulazi u broj svjetala, pa bi njegovo pojavljivanje rekompajliralo sve materijale.
+    this.torso.add(this.internals.coreLight);
+    for (const m of [this.internals.mats.brain, this.internals.mats.pcb]) m.userData.darkEnv = true;
+    this.internals.head.visible = false;
+    this.internals.torso.visible = false;
 
     // Oči.
     this.eyes = [];
@@ -289,6 +350,57 @@ export class RobotScene {
     }
 
     this.neck = new NeckRig({ root: this.root, head: this.headContent, mats: M });
+    this.#buildExplode();
+  }
+
+  /**
+   * Redoslijed rastavljanja (prozori unutar globalnog napretka): izvana prema unutra.
+   * Kabeli se najprije iskopčaju i bočni klipovi uvuku (inače bi zaključavali kranij),
+   * greben ide gore-natrag, maska se preklopi gore kao vizir, čeljust naprijed pa dolje, prsna
+   * ploča naprijed pa dolje, ramena u stranu, tek onda polovice kranija i uši; na
+   * kraju se razmaknu slojevi očiju, podigne hladnjak i rašire prstenovi reaktora.
+   */
+  #buildExplode() {
+    const P = this.panels;
+    const ex = (this.explode = new ExplodeController());
+    const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    ex.add({ name: 'kabeli', window: [0.0, 0.2], apply: (s) => (this.neck.unplug = Math.min(1, s)), freq: 3.2, damping: 0.9 });
+    ex.add({ name: 'greben', obj: P.crest, window: [0.02, 0.36], to: V(0, 5.6, -4.2), via: V(0, 3.6, 0) });
+    // Maska: kratko naprijed (oslobodi nos i rubove duplji), zatim se preklopi gore kao vizir.
+    ex.add({
+      name: 'maska',
+      obj: P.face,
+      window: [0.08, 0.52],
+      to: V(0, 3.2, 3.6),
+      via: V(0, 0.2, 3.4),
+      spin: { axis: V(1, 0, 0), angle: -0.98, pivot: V(0, 9.6, -4.2), start: 0.22 },
+    });
+    ex.add({ name: 'čeljust', obj: P.jaw, window: [0.12, 0.52], to: V(0, -6.2, 6.6), via: V(0, -0.4, 4.6) });
+    ex.add({ name: 'prsa', obj: P.chest, window: [0.04, 0.48], to: V(0, -5.5, 9.5), via: V(0, 0, 5.2) });
+    ex.add({ name: 'rame L', obj: P.shoulderL, window: [0.1, 0.5], to: V(-8.5, -1.2, 0.5) });
+    ex.add({ name: 'rame D', obj: P.shoulderR, window: [0.1, 0.5], to: V(8.5, -1.2, 0.5) });
+    ex.add({ name: 'kranij L', obj: P.craniumL, window: [0.34, 0.72], to: V(-8.0, 0.6, -2.2), via: V(-4.2, 0, -0.6) });
+    ex.add({ name: 'kranij D', obj: P.craniumR, window: [0.34, 0.72], to: V(8.0, 0.6, -2.2), via: V(4.2, 0, -0.6) });
+    for (const [i, ear] of this.ears.entries()) {
+      const sx = i === 0 ? -1 : 1;
+      ex.add({ name: `uho ${sx}`, obj: ear, window: [0.46, 0.82], to: V(sx * 3.4, 0, 0) });
+    }
+    ex.add({
+      name: 'oči',
+      window: [0.42, 0.92],
+      apply: (s) => {
+        for (const eye of this.eyes) eye.explode(Math.max(0, s));
+      },
+      freq: 2.5,
+    });
+    ex.add({ name: 'hladnjak', obj: this.internals.sink, window: [0.55, 0.96], to: V(0, 2.6, 0) });
+    ex.add({
+      name: 'reaktor',
+      window: [0.5, 0.96],
+      apply: (s) => {
+        for (const r of this.internals.reactorRings) r.position.z = r.userData.baseZ + r.userData.k * 2.4 * Math.max(0, s);
+      },
+    });
   }
 
   decalAtlasSync() {
@@ -345,10 +457,12 @@ export class RobotScene {
     }
   }
 
-  #buildEars(parent) {
+  #buildEars(parents) {
     const M = this.M;
     this.earRotors = [];
+    this.ears = [];
     for (const sx of [-1, 1]) {
+      const parent = parents[sx];
       const ear = new THREE.Group();
       ear.position.set(sx * 7.05, -0.9, -6.9);
       ear.rotation.z = sx * -Math.PI / 2; // os cilindra duž x
@@ -382,6 +496,7 @@ export class RobotScene {
       }
       ear.add(housing, face, hub, rotor, led, screws);
       parent.add(ear);
+      this.ears.push(ear);
       this.earRotors.push(rotor);
     }
   }
@@ -548,6 +663,12 @@ export class RobotScene {
 
   activate(scene, ctx) {
     scene.background = BG;
+    // Unutrašnjost i utikači kabela vidljivi su dok se shaderi scene kompajliraju
+    // (prvi update ih opet sakrije), pa prvo rastavljanje ne zastane.
+    if (this.internals) {
+      this.internals.head.visible = this.internals.torso.visible = true;
+      for (const c of this.neck.cables) c.plug.visible = true;
+    }
     scene.environment = this.darkEnv;
     scene.environmentIntensity = 1;
     // Keramika, krom i karbon dobivaju studijske trake u refleksijama; tamni metali,
@@ -593,6 +714,7 @@ export class RobotScene {
     const list = [];
     for (const eye of this.eyes) list.push(...eye.emissiveObjects);
     for (const [led] of this.leds) list.push(led);
+    list.push(...this.internals.glowObjects);
     return list;
   }
 
@@ -633,23 +755,49 @@ export class RobotScene {
     // 2 = oči uvijek prate (do granice rotacije oka); 3 = glava i oči prate.
     const gazeMode = ctx.gazeMode ?? 3;
     const followHead = gazeMode === 3;
+
+    // Ruke: kažiprst privlači pogled, dodir lica plaši/ljuti, dlan rastavlja, šaka sklapa.
+    this.#updateHands(dt, ctx.hand);
+    const attn = this.fingerAttn;
+    const finger = this.fingerWorld;
+    let toYaw = yaw, toPitch = pitch;
+    if (attn > 0.001) {
+      const fl = this.root.worldToLocal(finger.clone());
+      toYaw = THREE.MathUtils.lerp(yaw, Math.atan2(fl.x, Math.max(0.5, fl.z)), attn);
+      toPitch = THREE.MathUtils.lerp(pitch, Math.atan2(fl.y, Math.hypot(fl.x, Math.max(0.5, fl.z))), attn);
+    }
+
     // Ekvivalent udaljenosti gledatelja od ekrana (za blendu), neovisno o načinu kamere.
     const headWorld = this.root.localToWorld(new THREE.Vector3(0, 0, 0));
     const viewerZ = viewerWorld.distanceTo(headWorld) - Math.abs(ROBOT.z) * (this.displayScale ?? 1);
-    const g = this.gaze.update(dt, viewerZ, followHead ? new THREE.Vector2(yaw, pitch) : new THREE.Vector2(0, 0));
+    const g = this.gaze.update(dt, viewerZ, followHead ? new THREE.Vector2(toYaw, toPitch) : new THREE.Vector2(0, 0));
     const frontAngle = Math.atan2(Math.hypot(viewerLocal.x, viewerLocal.y), viewerLocal.z);
     const followGoal = gazeMode === 1 ? 1 - THREE.MathUtils.smoothstep(frontAngle, THREE.MathUtils.degToRad(22), THREE.MathUtils.degToRad(31)) : 1;
     this.eyeFollow = THREE.MathUtils.lerp(this.eyeFollow ?? 1, followGoal, 1 - Math.exp(-dt * 5));
 
-    // Disanje + glava/vrat s inercijom.
+    this.#updateReactions(dt);
+    const r = this.recoil;
+
+    // Disanje + glava/vrat s inercijom (+ ustuknuće i servo trzaji).
     const breath = Math.sin(T * (Math.PI * 2 / 4.6));
     this.torso.position.y = breath * 0.12;
     this.torso.scale.set(1 + breath * 0.004, 1 + breath * 0.006, 1 + breath * 0.008);
     this.neckJoint.position.y = NECK_BASE.y + breath * 0.1;
     this.neckJoint.rotation.set(-g.neck.y, g.neck.x, 0, 'YXZ');
-    this.headJoint.rotation.set(-(g.head.y - g.neck.y) + breath * 0.004, g.head.x - g.neck.x, Math.sin(T * 0.21) * 0.01, 'YXZ');
+    this.headJoint.position.set(0, 0.25 * r, -1.35 * r).add(HEAD_PIVOT).sub(NECK_BASE);
+    this.headJoint.rotation.set(
+      -(g.head.y - g.neck.y) + breath * 0.004 - 0.12 * r + this.twitch.x,
+      g.head.x - g.neck.x - this.recoilSide * 0.08 * r + this.twitch.y,
+      Math.sin(T * 0.21) * 0.01 + this.twitch.x * 0.4,
+      'YXZ',
+    );
 
-    // Oči: točno prema gledatelju (+ sakade u ravnini okomitoj na smjer pogleda).
+    // Rastavljanje: dijelovi, klik pri nasjedanju, unutrašnjost vidljiva samo dok treba.
+    this.explode.update(dt);
+    this.#afterExplode(dt);
+    const exploded = this.explode.amount;
+
+    // Oči: točno prema gledatelju (+ sakade) ili prema vrhu prsta (konvergencija).
     this.root.updateMatrixWorld(true);
     const toV = viewerWorld.clone().sub(headWorld).normalize();
     const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), toV).normalize();
@@ -658,27 +806,175 @@ export class RobotScene {
       .clone()
       .addScaledVector(right, g.offset.x * this.eyeFollow)
       .addScaledVector(up, g.offset.y * this.eyeFollow);
+    // Fiksacijski drhtaj pri praćenju prsta (kutno malen, kao kod pravog oka).
+    const fingerTarget = finger.clone().addScaledVector(right, Math.sin(T * 23.0) * 0.02).addScaledVector(up, Math.cos(T * 19.0) * 0.02);
     this.eyeColor.lerp(this.targetEyeColor, 1 - Math.exp(-dt * 6));
-    const pulse = 0.5 * Math.sin(T * 2.6) + 0.18 * Math.sin(T * 7.3 + 1.2);
+    const color = this.displayColor.copy(this.eyeColor).lerp(ANGRY, this.anger);
+    // Pulsiranje: ljut robot pulsira brže i jače.
+    this.pulsePhase = (this.pulsePhase ?? 0) + dt * (1 + 2.3 * this.anger);
+    const P = this.pulsePhase;
+    const pulse = (0.5 * Math.sin(P * 2.6) + 0.18 * Math.sin(P * 7.3 + 1.2)) * (1 + 1.6 * this.anger);
+    // Blizina prsta: uža blenda, jača jezgra.
+    const fingerClose = attn > 0 ? 1 - THREE.MathUtils.smoothstep(this.fingerEyeDist, 3, 34) : 0;
+    const aperture = THREE.MathUtils.lerp(g.aperture, THREE.MathUtils.lerp(0.48, 0.1, fingerClose), attn);
+    const brightness = THREE.MathUtils.lerp(g.brightness, THREE.MathUtils.lerp(1.0, 1.9, fingerClose), attn);
+    const limit = THREE.MathUtils.lerp(1, 0.16, Math.min(1, exploded * 1.4));
     for (const eye of this.eyes) {
-      const local = eye.root.worldToLocal(target.clone());
+      const lv = eye.root.worldToLocal(target.clone());
       // Izvan dosega (mod 1) oči se glatko vrate i gledaju ravno naprijed.
-      const ey = Math.atan2(local.x, local.z) * this.eyeFollow;
-      const ep = Math.atan2(local.y, Math.hypot(local.x, local.z)) * this.eyeFollow;
-      eye.gimbal.rotation.set(
-        -THREE.MathUtils.clamp(ep, -0.5, 0.5),
-        THREE.MathUtils.clamp(ey, -0.62, 0.62),
-        0,
-        'YXZ',
-      );
-      eye.setColor(this.eyeColor);
-      eye.setAperture(g.aperture);
-      eye.setBlink(g.blink);
-      eye.setIntensity(g.brightness, pulse);
+      let ey = Math.atan2(lv.x, lv.z) * this.eyeFollow;
+      let ep = Math.atan2(lv.y, Math.hypot(lv.x, lv.z)) * this.eyeFollow;
+      if (attn > 0.001) {
+        const lf = eye.root.worldToLocal(fingerTarget.clone());
+        const fz = Math.max(0.3, lf.z);
+        ey = THREE.MathUtils.lerp(ey, Math.atan2(lf.x, fz), attn);
+        ep = THREE.MathUtils.lerp(ep, Math.atan2(lf.y, Math.hypot(lf.x, fz)), attn);
+      }
+      const maxYaw = THREE.MathUtils.lerp(0.62, 0.7, attn) * limit;
+      eye.gimbal.rotation.set(-THREE.MathUtils.clamp(ep, -0.5 * limit, 0.5 * limit), THREE.MathUtils.clamp(ey, -maxYaw, maxYaw) + this.twitch.y * 0.6, 0, 'YXZ');
+      eye.setColor(color);
+      eye.setAperture(Math.max(0, aperture * (1 - this.irisSnap) * (1 - 0.32 * this.anger)));
+      eye.setBlink(Math.max(g.blink, this.startle * 0.7, 0.3 * this.anger));
+      eye.setIntensity(brightness * (1 + 2.4 * this.flash) * (1 + 0.45 * this.anger), pulse);
     }
-    for (const [led, k] of this.leds) led.material.color.copy(this.eyeColor).multiplyScalar(k * (0.75 + 0.25 * Math.sin(T * 1.7)));
-    for (const [i, r] of this.earRotors.entries()) r.rotation.y = T * (i ? -0.35 : 0.35);
+    const ledBoost = 1 + 3 * this.ledFlash;
+    for (const [led, k] of this.leds) led.material.color.copy(color).multiplyScalar(k * ledBoost * (0.75 + 0.25 * Math.sin(T * 1.7)));
+    for (const [i, rotor] of this.earRotors.entries()) rotor.rotation.y = T * (i ? -0.35 : 0.35);
+    // Unutrašnjost svijetli istom bojom kao oči.
+    const I = this.internals;
+    const glowK = 1 + 0.25 * pulse;
+    I.stripMaterial.color.copy(color).multiplyScalar(3.2 * glowK);
+    I.reactorRings.forEach((ring, i) => ring.material.color.copy(color).multiplyScalar((3 + i * 2.2) * glowK));
+    I.coreSphere.material.color.copy(color).multiplyScalar(14 * glowK);
+    I.coreLight.color.copy(color);
+    I.coreLight.intensity = 150 * Math.min(1, exploded * 2) * glowK;
+    this.M.cage.emissive.copy(color).multiplyScalar(this.seamFlash * 1.8);
     this.neck.update();
+  }
+
+  /** Ruke → stanje: pažnja prema prstu, dodir lica, ciljna razina rastavljanja. */
+  #updateHands(dt, hand) {
+    const T = this.time;
+    const alive = hand?.hands?.filter((v) => v.alive) ?? [];
+    const pointer = alive.find((v) => v.gesture === 'point');
+    const open = alive.find((v) => v.gesture === 'open');
+    const fist = alive.find((v) => v.gesture === 'fist');
+
+    // Pogled: brzo na prst (sakada), polako natrag na gledatelja.
+    const goal = pointer ? 1 : 0;
+    this.fingerAttn += (goal - this.fingerAttn) * (1 - Math.exp(-dt * (goal > this.fingerAttn ? 16 : 2.6)));
+    if (pointer) this.fingerWorld.copy(pointer.tip);
+    const fl = this.headContent.worldToLocal(_v.copy(this.fingerWorld));
+    this.fingerEyeDist = fl.length();
+
+    // Rastavljanje: dok je dlan otvoren, količina prati raširenost prstiju; kad dlan
+    // nestane, ostaje rastavljeno (najveća razina iz zadnjih ~0,45 s jer se prsti
+    // skupe prije spuštanja ruke); šaka sve vrati na mjesto.
+    if (open && !this.custom) {
+      const amt = THREE.MathUtils.smoothstep(open.spread, 0.08, 0.85);
+      this.openHist.push([T, amt]);
+      while (this.openHist.length && T - this.openHist[0][0] > 0.45) this.openHist.shift();
+      this.explodeTarget = amt;
+      this.openLatched = true;
+    } else if (this.openLatched) {
+      for (const [, a] of this.openHist) this.explodeTarget = Math.max(this.explodeTarget, a);
+      this.openHist.length = 0;
+      this.openLatched = false;
+    }
+    if (fist) this.explodeTarget = 0;
+    this.explode.target = this.explodeTarget;
+
+    // Dodir: vrh prsta blizu površine glave (SDF glave u prostoru glave, cm).
+    const toucher = pointer ?? alive.find((v) => v.gesture === 'none');
+    let near = Infinity;
+    let side = this.recoilSide;
+    if (toucher && this.explode.amount < 0.15 && !this.custom) {
+      const l = this.headContent.worldToLocal(_v.copy(toucher.tip));
+      near = headSolid(l.x, l.y, l.z);
+      side = Math.sign(l.x) || 1;
+    }
+    const was = this.touching;
+    this.touching = was ? near < 3.6 : near < 1.6;
+    if (this.touching && !was) this.#flinch(side);
+    this.touchTime = this.touching ? this.touchTime + dt : 0;
+    // Ljutnja: nakon ~2 s dodira raste, a kad ruka ode, robot se polako smiri.
+    const angerGoal = this.touchTime > 2 ? 1 : 0;
+    this.anger += (angerGoal - this.anger) * (1 - Math.exp(-dt * (angerGoal ? 2.4 : 0.8)));
+    this.fingerNear = near;
+  }
+
+  /** Trzaj na dodir: glava ustukne, oči bljesnu, blende se zatvore pa otvore. */
+  #flinch(side) {
+    this.recoilSide = side;
+    this.recoilV += 7.5;
+    this.flash = 1;
+    this.irisSnapT = 0;
+    this.startle = 1;
+  }
+
+  #updateReactions(dt) {
+    // Ustuknuće: podprigušena opruga; dok je prst blizu, glava ostaje malo odmaknuta.
+    const goal = this.touching ? 0.6 : 0;
+    const w = 2 * Math.PI * 2.4;
+    const steps = Math.max(1, Math.ceil(dt / 0.004));
+    const h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      this.recoilV += (w * w * (goal - this.recoil) - 2 * 0.42 * w * this.recoilV) * h;
+      this.recoil += this.recoilV * h;
+    }
+    this.flash *= Math.exp(-dt / 0.16);
+    this.startle *= Math.exp(-dt / 0.12);
+    this.ledFlash *= Math.exp(-dt / 0.25);
+    // Blenda: brzo zatvori (60 ms), drži (100 ms), otvori (340 ms).
+    if (this.irisSnapT >= 0) {
+      this.irisSnapT += dt;
+      const t = this.irisSnapT;
+      this.irisSnap = t < 0.06 ? t / 0.06 : t < 0.16 ? 1 : Math.max(0, 1 - (t - 0.16) / 0.34);
+      if (t > 0.5) this.irisSnapT = -1;
+    } else {
+      this.irisSnap = 0;
+    }
+    // Servo trzaji ljutog robota: kratki, oštri pomaci glave koji se brzo smire.
+    if (this.anger > 0.25) {
+      this.nextTwitch -= dt;
+      if (this.nextTwitch <= 0) {
+        const a = THREE.MathUtils.degToRad(1.1) * this.anger;
+        this.twitchV.set((Math.random() - 0.5) * 2 * a * 28, (Math.random() - 0.5) * 2 * a * 28);
+        this.nextTwitch = 0.12 + Math.random() * 0.32;
+      }
+    }
+    // Kruta opruga (9 Hz): mali podkoraci da ostane stabilna i kad frame potraje.
+    const tw = 2 * Math.PI * 9;
+    const n = Math.max(1, Math.ceil(dt / 0.003));
+    const hh = dt / n;
+    for (let i = 0; i < n; i++) {
+      this.twitchV.x += (-tw * tw * this.twitch.x - 2 * 0.5 * tw * this.twitchV.x) * hh;
+      this.twitchV.y += (-tw * tw * this.twitch.y - 2 * 0.5 * tw * this.twitchV.y) * hh;
+      this.twitch.x += this.twitchV.x * hh;
+      this.twitch.y += this.twitchV.y * hh;
+    }
+  }
+
+  /** Klik pri nasjedanju dijelova + zaključavanje kad je sve na mjestu. */
+  #afterExplode(dt) {
+    const ex = this.explode;
+    for (const { speed } of ex.seats) {
+      this.seamFlash = Math.min(1.1, Math.max(this.seamFlash, 0.35 + speed * 0.22));
+      this.recoilV -= 0.5 * Math.min(2, speed);
+    }
+    const amount = ex.amount;
+    if (amount > 0.2) this.wasExploded = true;
+    if (this.wasExploded && ex.settled) {
+      // Sve je sjelo: blende "škljocnu", LED-ice bljesnu.
+      this.wasExploded = false;
+      this.irisSnapT = 0;
+      this.ledFlash = 1;
+      this.seamFlash = Math.max(this.seamFlash, 0.9);
+    }
+    this.seamFlash *= Math.exp(-dt / 0.24);
+    const show = amount > 0.002 || ex.p > 0.002;
+    this.internals.head.visible = show && this.procHead.visible;
+    this.internals.torso.visible = show;
   }
 
   /** ORBIT: točka interesa je središte glave (statično — robot stoji mirno). */
@@ -692,7 +988,7 @@ export class RobotScene {
     this.reach ??= { target: new THREE.Vector3(), near: 0, far: 0, minCam: 12 };
     this.orbitTarget(this.reach.target);
     this.reach.near = 45 * s;
-    this.reach.far = 3 * s;
+    this.reach.far = 4.5 * s;
     return this.reach;
   }
 

@@ -72,9 +72,12 @@ export class EyeUnit {
     ball.castShadow = true;
     ball.receiveShadow = true;
     this.gimbal.add(ball);
+    // Slojevi za rastavljanje (exploded view): [objekt, pomak duž optičke osi pri punom rastavljanju].
+    this.layers = [[ball, -0.35]];
     // Ekvatorski prsten (anodizirani) — mehanički detalj kad oko skrene.
     const band = new THREE.Mesh(new THREE.TorusGeometry(1.31, 0.05, 12, 96), M.anodized);
     this.gimbal.add(band);
+    this.layers.push([band, -0.35]);
 
     // Objektiv: stepenasta cijev s nazubljenim prstenom.
     const barrelProfile = [
@@ -91,6 +94,7 @@ export class EyeUnit {
     const barrel = new THREE.Mesh(new THREE.LatheGeometry(barrelProfile, 96).rotateX(Math.PI / 2), M.barrel);
     barrel.castShadow = true;
     this.gimbal.add(barrel);
+    this.layers.push([barrel, 2.9]);
 
     // Prsten s gravurom oznaka (ispred cijevi).
     const ring = new THREE.Mesh(
@@ -107,6 +111,7 @@ export class EyeUnit {
     );
     ring.position.z = 1.085;
     this.gimbal.add(ring);
+    this.layers.push([ring, 3.4]);
 
     // --- Unutrašnjost: tamna leća, emisivni prstenovi na različitim dubinama, jezgra ---
     const interior = new THREE.Mesh(
@@ -128,14 +133,16 @@ export class EyeUnit {
       [0.3, 0.36, 0.31, 0.95],
       [0.2, 0.235, 0.18, 1.5],
     ];
-    for (const [r0, r1, z, k] of ringSpec) {
+    ringSpec.forEach(([r0, r1, z, k], i) => {
       const mat = new THREE.MeshBasicMaterial({ color: this.color.clone(), toneMapped: false, side: THREE.DoubleSide });
       const r = new THREE.Mesh(new THREE.RingGeometry(r0, r1, 96), mat);
       r.position.z = z;
       this.gimbal.add(r);
       this.ringMats.push([mat, k]);
       this.emissiveObjects.push(r);
-    }
+      // Rastavljeni prstenovi tvore stožac prema naprijed (manji ispred većih).
+      this.layers.push([r, 0.4 + 0.35 * i]);
+    });
     // Radijalne "lopatice" između prstenova — fina mehanika iza blende.
     const spokes = new THREE.InstancedMesh(new THREE.BoxGeometry(0.018, 0.26, 0.018), M.interiorLit, 12);
     for (let i = 0; i < 12; i++) {
@@ -143,11 +150,13 @@ export class EyeUnit {
       spokes.setMatrixAt(i, m4);
     }
     this.gimbal.add(spokes);
+    this.layers.push([spokes, 0.5]);
 
     this.coreMat = new THREE.MeshBasicMaterial({ color: this.color.clone(), toneMapped: false });
     this.core = new THREE.Mesh(new THREE.SphereGeometry(0.15, 32, 16), this.coreMat);
     this.core.position.z = 0.1;
     this.gimbal.add(this.core);
+    this.layers.push([this.core, 1.7]);
     // Mekani sjaj oko jezgre (disk s radijalnim gradijentom, aditivno).
     this.glowMat = new THREE.ShaderMaterial({
       uniforms: { color: { value: this.color.clone() }, strength: { value: 1 } },
@@ -162,6 +171,7 @@ export class EyeUnit {
     const glow = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 1.5), this.glowMat);
     glow.position.z = 0.2;
     this.gimbal.add(glow);
+    this.layers.push([glow, 1.7]);
     this.emissiveObjects.push(this.core, glow);
 
     // --- Iris-blenda: lamele s blagim preklapanjem po dubini ---
@@ -195,6 +205,7 @@ export class EyeUnit {
       pivot.add(blade);
       this.gimbal.add(pivot);
       this.blades.push({ pivot, blade });
+      this.layers.push([pivot, 2.3 + i * 0.02]);
     }
 
     // --- Rožnica: staklena kupola s AR prevlakom ---
@@ -208,6 +219,7 @@ export class EyeUnit {
     cornea.renderOrder = 3;
     this.gimbal.add(cornea);
     this.cornea = cornea;
+    this.layers.push([cornea, 4.0]);
 
     // --- Kapci: dvije sferne ljuske koje se zatvaraju oko osi x ---
     this.lids = [];
@@ -233,6 +245,9 @@ export class EyeUnit {
     this.light = new THREE.PointLight(this.color, 1, 10, 2);
     this.light.position.set(0, 0, 1.9);
     this.gimbal.add(this.light);
+    this.layers.push([this.light, 1.7]);
+    for (const l of this.layers) l.push(l[0].position.z);
+    this.exploded = 0;
 
     this.aperture = 0.55;
     this.blink = 0; // 0 otvoreno, 1 zatvoreno
@@ -268,10 +283,23 @@ export class EyeUnit {
   setBlink(b) {
     this.blink = b;
     // U mirovanju gornji kapak blago prekriva vrh leće (smiren pogled), donji je niže.
+    // Rastavljeno oko: kapci se otvore do kraja i odmaknu (vidi se cijeli objektiv).
+    const e = this.exploded;
     for (const { lid, dir } of this.lids) {
-      const open = THREE.MathUtils.degToRad(dir > 0 ? 62 : 74);
-      lid.rotation.x = dir * -(1 - b) * open;
+      const open = THREE.MathUtils.degToRad((dir > 0 ? 62 : 74) + 22 * e);
+      lid.rotation.x = dir * -(1 - b * (1 - e)) * open;
+      lid.position.y = dir * 0.55 * e;
     }
+  }
+
+  /**
+   * Rastavljanje oka duž optičke osi: kućište malo natrag, prstenovi u stožac,
+   * jezgra, iris-blenda, objektiv, prsten s gravurom i rožnica redom naprijed.
+   * @param {number} s 0 = sklopljeno, 1 = potpuno rastavljeno
+   */
+  explode(s) {
+    this.exploded = s;
+    for (const [obj, k, base] of this.layers) obj.position.z = base + k * s;
   }
 
   /** Svjetlina jezgre i prstenova (HDR), uključujući pulsaciju. */

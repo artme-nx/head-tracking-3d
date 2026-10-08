@@ -48,6 +48,15 @@ za AAA scene, meshoptimizer za generiranu geometriju.
   inercijom (opruga s prigušenjem i "servo" mrtvom zonom). Kad se približiš, blenda se sužava i jezgra
   posvijetli. Povremeno trepće kapcima ili zatvaranjem blende; suptilno "diše".
 - `E` mijenja boju očiju: ledeno cijan ↔ jantarna.
+- **Ruke:** ispruženi kažiprst privuče pogled — oči prestanu gledati tebe i prate vrh prsta u 3D-u (blizu lica
+  konvergiraju i iris-blende se suze), a kad spustiš ruku, pogled se glatko vrati prema G pravilima. Dodir lica:
+  glava ustukne na opruzi, oči bljesnu, blende se zatvore pa otvore; prst blizu dulje od ~2 s i robot se naljuti
+  (crvene oči, jače pulsiranje, servo trzaji, stisnuti kapci), a kad makneš ruku, smiri se.
+- **Rastavljanje:** otvoren dlan s raširenim prstima rastavi glavu i poprsje kao tehnički prikaz proizvoda
+  (količina prati raširenost prstiju). Kabeli vrata se iskopčaju i bočni klipovi uvuku, maska se preklopi gore kao
+  vizir, polovice kranija i uši odu u stranu, slojevi očiju se razmaknu duž optičke osi; unutra su kavez s
+  prozorima, procesor s hladnjakom, servo motori, optički kabeli, kralježnica i reaktor u prsima. Šaka sve vrati
+  obrnutim redom: dijelovi sjednu s malim odskokom, spojevi kratko zasvijetle, blende škljocnu.
 - **Vlastita glava:** dok si na sceni 4, ispusti .glb/.gltf glave — model sjeda na vrat, dobiva duplje i
   iste mehaničke oči (automatsko pozicioniranje). `↑`/`↓` fino pomiče oči, `[`/`]` veličina, `R` okret.
 

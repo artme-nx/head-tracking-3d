@@ -48,6 +48,19 @@ function sdfNormals(model, piece, positions) {
   return normals;
 }
 
+/** Dubina ispod vanjske površine (pomoćni kanal modela) za svaki vrh — za unutarnje plohe ljuski. */
+function shellDepth(model, positions) {
+  const K = model.pieces.length;
+  const out = new Float64Array(K + 1);
+  const n = positions.length / 3;
+  const depth = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    model.eval(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2], out);
+    depth[i] = out[K];
+  }
+  return depth;
+}
+
 function orient(indices, positions, normals) {
   for (let t = 0; t < indices.length; t += 3) {
     const a = indices[t], b = indices[t + 1], c = indices[t + 2];
@@ -86,8 +99,13 @@ self.onmessage = async (ev) => {
       }
       const normals = sdfNormals(model, piece, positions);
       orient(indices, positions, normals);
-      result.push({ name: model.pieces[piece], positions, normals, indices });
+      const mesh = { name: model.pieces[piece], positions, normals, indices };
       transfer.push(positions.buffer, normals.buffer, indices.buffer);
+      if (model.shellDepth) {
+        mesh.depth = shellDepth(model, positions);
+        transfer.push(mesh.depth.buffer);
+      }
+      result.push(mesh);
     });
     const t2 = performance.now();
     self.postMessage(

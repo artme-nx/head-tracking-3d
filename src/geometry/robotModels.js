@@ -147,7 +147,7 @@ function faceField(x, y, z) {
 }
 
 /** Puni volumen glave s izrezanim dupljama, ustima, ušima i otvorom za vrat. */
-function headSolid(x, y, z) {
+export function headSolid(x, y, z) {
   const ax = abs(x);
   // Lubanja (jaje) + volumen lica.
   let d = sdEllipsoid(x, y - 2.7, z + 7.5, 7.45, 9.05, 9.3);
@@ -210,15 +210,37 @@ function regionCrest(x, y) {
   return max(abs(x) - 1.2, -(y - 3.5));
 }
 
+// --- Unutarnji kavez glave ------------------------------------------------------
+// Ljuska ispod panela s velikim prozorima: ostaju trake (sagitalna, ekvator na
+// razini očiju, gornji prsten, koronalni luk), prsteni oko duplji, nosači ušiju i
+// puni donji dio uz vrat. Kad se paneli rastave, kroz prozore se vidi mehanika.
+const CAGE_HEAD = [0.55, 1.15]; // dubina vanjske i unutarnje plohe kaveza ispod površine
+
+function headCage(x, y, z, h) {
+  const shell = max(h + CAGE_HEAD[0], -(h + CAGE_HEAD[1]));
+  if (shell > 0.8) return shell;
+  const ax = abs(x);
+  let F = ax - 0.8;
+  F = min(F, abs(y - 0.25) - 0.95);
+  F = min(F, abs(y - 6.0) - 0.65);
+  F = min(F, abs(z + 7.6) - 0.8);
+  F = min(F, y + 6.4);
+  if (z > -6.5) F = min(F, sqrt((ax - EYE_X) * (ax - EYE_X) + (y - 0.05) * (y - 0.05)) - (SOCKET_R + 1.25));
+  if (ax > 3.8) F = min(F, sqrt((y + 0.9) * (y + 0.9) + (z + 6.9) * (z + 6.9)) - 3.2);
+  return smax(shell, F, 0.25);
+}
+
 export function robotHeadModel({ step = 0.095 } = {}) {
-  const pieces = ['face', 'jaw', 'cranium', 'crest', 'skull'];
+  // Kranij je podijeljen na lijevu i desnu polovicu (rastavljanje ide u stranu).
+  const pieces = ['face', 'jaw', 'craniumL', 'craniumR', 'crest', 'cage'];
   return {
     pieces,
     bounds: [-8.6, -13.6, -18.2, 8.6, 12.6, 4.4],
     step,
     block: 8,
     cullMargin: 0.3,
-    minAux: [-0.62, -0.62, -0.62, -0.62, -1e9],
+    minAux: [-0.62, -0.62, -0.62, -0.62, -0.62, -1e9],
+    shellDepth: true, // dubina vrhova (unutarnja ploha panela je sirovi, mat kompozit)
     simplifyError: 0.006,
     normalEpsilon: 0.03,
     eval(x, y, z, out) {
@@ -240,22 +262,24 @@ export function robotHeadModel({ step = 0.095 } = {}) {
       out[0] = smax(smax(shell, rf + GAP, bevel), -rj + GAP, bevel);
       // Čeljust: prednja regija ispod linije usta.
       out[1] = smax(smax(shell, rf + GAP, bevel), rj + GAP, bevel);
-      // Lubanja: izvan prednje regije, bez grebena.
-      out[2] = smax(smax(shell, -rf + tw * 2 - GAP, bevel), -rc + GAP, bevel);
+      // Lubanja: izvan prednje regije, bez grebena; lijeva i desna polovica.
+      const cranium = smax(smax(shell, -rf + tw * 2 - GAP, bevel), -rc + GAP, bevel);
+      out[2] = smax(cranium, x + GAP, bevel);
+      out[3] = smax(cranium, -x + GAP, bevel);
       // Karbonski greben: malo uvučen.
       const crestShell = max(h + 0.12, -(h + SHELL));
-      out[3] = smax(smax(crestShell, rc + GAP * 0.5, bevel), -rf + GAP, bevel);
-      // Unutarnja tamna lubanja (vidi se kroz procjepe).
-      out[4] = h + 0.3;
-      out[5] = h; // pomoćni kanal: odbaci duboke unutarnje stijenke ljuski
-      // Sve površine su unutar pojasa h ∈ [-0.62, 0] → udaljenost do pojasa.
-      return h > 0 ? h : h < -0.62 ? -(h + 0.62) : 0;
+      out[4] = smax(smax(crestShell, rc + GAP * 0.5, bevel), -rf + GAP, bevel);
+      // Unutarnji kavez (vidi se kroz procjepe, a rastavljen otkriva mehaniku).
+      out[5] = headCage(x, y, z, h);
+      out[6] = h; // pomoćni kanal: odbaci duboke unutarnje stijenke ljuski
+      // Sve površine su unutar pojasa h ∈ [-1.25, 0] → udaljenost do pojasa.
+      return h > 0 ? h : h < -1.25 ? -(h + 1.25) : 0;
     },
   };
 }
 
 // --- Poprsje -----------------------------------------------------------------
-function torsoSolid(x, y, z) {
+export function torsoSolid(x, y, z) {
   const ax = abs(x);
   // Prsni koš.
   let d = sdEllipsoid(x, y + 33.5, z + 7.2, 15.0, 12.5, 9.4);
@@ -281,14 +305,39 @@ function regionShoulder(x, y, z) {
   return sdEllipsoid(abs(x) - 16.6, y + 28.6, z + 7.6, 5.3, 6.4, 5.6);
 }
 
+// --- Unutarnji kavez poprsja: rebra, prsna kost / kralježnica, ležišta ramena,
+// pun gornji prsten oko vrata i okrugli otvor sprijeda za reaktor u prsima.
+const CAGE_BODY = [0.75, 1.4];
+export const CORE_CENTER = [0, -29.8, -6.6]; // središte reaktora (prostor poprsja)
+
+function bodyCage(x, y, z, h) {
+  const shell = max(h + CAGE_BODY[0], -(h + CAGE_BODY[1]));
+  if (shell > 0.9) return shell;
+  const ax = abs(x);
+  const u = (y + 26.6) / 3.3;
+  let F = abs(u - Math.round(u)) * 3.3 - 0.55; // rebra
+  F = min(F, ax - 1.3); // prsna kost sprijeda, kralježnica straga
+  F = min(F, -y - 25.0); // gornji prsten oko vrata
+  F = min(F, y + 50.0); // donji rub
+  F = min(F, sqrt((ax - 16.2) * (ax - 16.2) + (y + 28.4) * (y + 28.4) + (z + 7.6) * (z + 7.6)) - 6.2);
+  let d = smax(shell, F, 0.3);
+  // Okrugli otvor sprijeda (kroz njega se vidi reaktor).
+  const port = max(sqrt(x * x + (y - CORE_CENTER[1]) * (y - CORE_CENTER[1])) - 4.0, -(z + 7.5));
+  d = smax(d, -port, 0.25);
+  return d;
+}
+
 export function robotBodyModel({ step = 0.14 } = {}) {
   return {
-    pieces: ['chest', 'shoulders', 'trapezius', 'core'],
+    // Ramena su podijeljena na lijevo/desno (rastavljanje ide u stranu). Karbonski plašt
+    // ostaje cijeli: kroz njega prolaze kabeli i klipovi vrata.
+    pieces: ['chest', 'shoulderL', 'shoulderR', 'trapezius', 'cage'],
     bounds: [-24, -58.5, -20, 24, -17, 4],
     step,
     block: 8,
     cullMargin: 0.4,
-    minAux: [-0.75, -0.75, -0.75, -1e9],
+    minAux: [-0.75, -0.75, -0.75, -0.75, -1e9],
+    shellDepth: true,
     simplifyError: 0.008,
     normalEpsilon: 0.04,
     eval(x, y, z, out) {
@@ -299,12 +348,14 @@ export function robotBodyModel({ step = 0.14 } = {}) {
       const bevel = 0.12;
       const g = 0.13;
       out[0] = smax(smax(shell, rc + g, bevel), -rs + g, bevel);
-      out[1] = smax(shell, rs + g, bevel);
+      const shoulders = smax(shell, rs + g, bevel);
+      out[1] = max(shoulders, x);
+      out[2] = max(shoulders, -x);
       const carbon = max(h + 0.1, -(h + 0.55));
-      out[2] = smax(smax(carbon, -rc + g, bevel), -rs + g, bevel);
-      out[3] = h + 0.38;
-      out[4] = h;
-      return h > 0 ? h : h < -0.75 ? -(h + 0.75) : 0;
+      out[3] = smax(smax(carbon, -rc + g, bevel), -rs + g, bevel);
+      out[4] = bodyCage(x, y, z, h);
+      out[5] = h;
+      return h > 0 ? h : h < -1.5 ? -(h + 1.5) : 0;
     },
   };
 }
